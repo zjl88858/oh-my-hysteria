@@ -1,0 +1,9 @@
+with-expecter: true
+inpackage: true
+dir: .
+packages:
+  github.com/zjl88858/oh-my-hysteria/core/v2/client:
+    interfaces:
+      udpIO:
+        config:
+          mockname: mockUDPIO

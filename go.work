@@ -1,0 +1,8 @@
+go 1.26.0
+
+use (
+	./app
+	./core
+	./extras
+	./third_party/quic-go
+)
