@@ -120,6 +120,9 @@ type serverConfigObfs struct {
 	Salamander serverConfigObfsSalamander `mapstructure:"salamander"`
 	Gecko      serverConfigObfsGecko      `mapstructure:"gecko"`
 	Blink      configObfsBlink            `mapstructure:"blink"`
+	Presto     configObfsPresto           `mapstructure:"presto"`
+	Trident    configObfsTrident          `mapstructure:"trident"`
+	Carakan    configObfsCarakan          `mapstructure:"carakan"`
 }
 
 type serverConfigTLS struct {
@@ -434,6 +437,24 @@ func (c *serverConfig) fillRealmConn(hyConfig *server.Config, addr *realm.Addr) 
 
 func (c *serverConfig) wrapObfs(conn net.PacketConn) (net.PacketConn, error) {
 	switch strings.ToLower(c.Obfs.Type) {
+	case "carakan":
+		wrapped, err := obfs.WrapPacketConnCarakan(conn, c.Obfs.Carakan.options(true))
+		if err != nil {
+			return nil, configError{Field: "obfs.carakan", Err: err}
+		}
+		return wrapped, nil
+	case "trident":
+		wrapped, err := obfs.WrapPacketConnTrident(conn, c.Obfs.Trident.options(true))
+		if err != nil {
+			return nil, configError{Field: "obfs.trident", Err: err}
+		}
+		return wrapped, nil
+	case "presto":
+		wrapped, err := obfs.WrapPacketConnPresto(conn, c.Obfs.Presto.options(true))
+		if err != nil {
+			return nil, configError{Field: "obfs.presto", Err: err}
+		}
+		return wrapped, nil
 	case "blink":
 		wrapped, err := obfs.WrapPacketConnBlink(conn, c.Obfs.Blink.options(true))
 		if err != nil {

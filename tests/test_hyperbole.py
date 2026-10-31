@@ -2,8 +2,10 @@
 
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 
@@ -22,8 +24,23 @@ class BuildToolTests(unittest.TestCase):
     def test_default_version_ignores_upstream_tags_and_environment(self):
         with mock.patch.dict(os.environ, {"HY_APP_VERSION": "v2.99.0"}, clear=True):
             with mock.patch.object(subprocess, "check_output") as git:
-                self.assertEqual(hyperbole.get_app_version(), "v1.0.0")
+                self.assertEqual(hyperbole.get_app_version(), "v1.1.0")
                 git.assert_not_called()
+
+    def test_release_version_is_consistent(self):
+        root = hyperbole.PROJECT_ROOT
+        version = (root / "VERSION").read_text(encoding="utf-8").strip()
+        project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+        packages = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))["package"]
+        locked = next(p for p in packages if p["name"] == project["name"])
+        go_source = (root / "app/cmd/root.go").read_text(encoding="utf-8")
+        self.assertEqual(re.search(r'appVersion\s*=\s*"([^"]+)"', go_source).group(1), version)
+        self.assertEqual(project["version"], version.removeprefix("v"))
+        self.assertEqual(locked["version"], project["version"])
+        readme = (root / "README.md").read_text(encoding="utf-8")
+        self.assertIn(f"**{version}**", readme)
+        self.assertIn(f"oh-my-hysteria:{project['version']}", readme)
+        self.assertIn(f"## {version}", (root / "CHANGELOG.md").read_text(encoding="utf-8"))
 
     def test_version_override(self):
         with mock.patch.dict(os.environ, {"OH_MY_HYSTERIA_VERSION": "v1.1.0-test"}):
@@ -70,7 +87,7 @@ class BuildToolTests(unittest.TestCase):
                 hyperbole,
                 BUILD_DIR=directory,
                 check_build_env=mock.Mock(return_value=True),
-                get_app_version=mock.Mock(return_value="v1.0.0"),
+                get_app_version=mock.Mock(return_value="v1.1.0"),
                 get_app_commit=mock.Mock(return_value="test-commit"),
                 get_toolchain=mock.Mock(return_value="go1.26.0 windows/amd64"),
                 get_lib_version=mock.Mock(return_value="test-quic"),
@@ -81,7 +98,7 @@ class BuildToolTests(unittest.TestCase):
             commands = [call.args[0] for call in run.call_args_list]
             self.assertEqual(Path(commands[0][3]).name, "oh-my-hysteria-windows-amd64.exe")
             self.assertEqual(Path(commands[1][3]).name, "oh-my-hysteria-linux-arm64")
-            self.assertIn(".appVersion=v1.0.0", commands[0][5])
+            self.assertIn(".appVersion=v1.1.0", commands[0][5])
             self.assertIn("-trimpath", commands[0])
             for name in ("LICENSE.md", "LICENSE-THIRD-PARTY.md"):
                 self.assertEqual((Path(directory) / name).read_bytes(), (hyperbole.PROJECT_ROOT / name).read_bytes())

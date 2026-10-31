@@ -1,6 +1,6 @@
 [project]
 name = "oh-my-hysteria-dev-tools"
-version = "1.0.0"
+version = "1.1.0"
 description = "Build script (hyperbole) and Python test helpers for oh-my-hysteria"
 requires-python = ">=3.11"
 dependencies = [

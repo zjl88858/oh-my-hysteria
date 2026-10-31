@@ -48,7 +48,10 @@ func TestServerConfig(t *testing.T) {
 				MinPacketSize: 100,
 				MaxPacketSize: 1200,
 			},
-			Blink: blinkConfigFixture(),
+			Blink:   blinkConfigFixture(),
+			Presto:  configObfsPresto{Password: "presto-config-fixture-test-only-secret"},
+			Trident: configObfsTrident{Password: "trident-config-fixture-test-only-secret"},
+			Carakan: configObfsCarakan{Password: "carakan-config-fixture-test-only-secret", TargetEntropy: carakanEntropyPointer(4.5)},
 		},
 		TLS: &serverConfigTLS{
 			Cert:     "some.crt",

@@ -85,7 +85,10 @@ func TestClientServerTrafficLoggerTCP(t *testing.T) {
 	time.Sleep(1 * time.Second) // Need some time for the server to receive the data
 
 	// Client reads from server again but blocked
-	trafficLogger.EXPECT().UntraceStream(mock.Anything).Return().Once()
+	untraced := make(chan struct{})
+	trafficLogger.EXPECT().UntraceStream(mock.Anything).Run(func(server.HyStream) {
+		close(untraced)
+	}).Return().Once()
 	trafficLogger.EXPECT().LogTraffic("nobody", uint64(0), uint64(4)).Return(false).Once()
 	trafficLogger.EXPECT().LogOnlineState("nobody", false).Return().Once()
 	sobConnCh <- []byte("nope")
@@ -96,6 +99,13 @@ func TestClientServerTrafficLoggerTCP(t *testing.T) {
 	// The client should be disconnected
 	_, err = c.TCP("whatever")
 	assert.Error(t, err)
+	// Connection closure can reach the client before the server's deferred
+	// stream cleanup runs. Wait for that event before mock cleanup asserts it.
+	select {
+	case <-untraced:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not untrace the closed stream")
+	}
 }
 
 // TestClientServerTrafficLoggerUDP tests that the traffic logger is correctly called for UDP sessions,

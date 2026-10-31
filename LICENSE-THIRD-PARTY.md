@@ -49,6 +49,27 @@ SOFTWARE.
 
 ## Other third-party code
 
+### Carakan tANS design (no imported entropy-coder implementation)
+
+Carakan's target-spectrum compiler, inverse tANS coder, canonical termination,
+framing and tests are original MIT-0 code. The receiver is adapted from this
+project's MIT-0 Trident receiver; it does not share Trident's wire format or
+keys. ANS/tANS are mathematical coding techniques; no FSE, Zstandard, JSC,
+Opera/Carakan engine source or third-party entropy-coder dependency is imported,
+translated or executed. The name does not imply affiliation with those projects.
+Existing standard-library and x/crypto license obligations remain unchanged.
+See `docs/carakan.md` for the distinct format and statistical limitations.
+
+### Presto design research (no imported ScrambleSuit code)
+
+Presto's compiler, framing, pacing, integration and tests are original MIT-0.
+The design refers only to the high-level ideas in Winter, Pulls and Fuss's
+2013 paper (arXiv:1305.3199v1): shared-secret admission and variable traffic
+shapes. No ScrambleSuit/obfsproxy source, wire format, handshake or dependency
+is imported, translated, compiled or executed. This independent project is not
+affiliated with or endorsed by the Tor Project. Existing Go standard-library
+and x/crypto license obligations are unchanged. See `docs/presto.md`.
+
 ### Blink design reference (no imported AmneziaWG code)
 
 Blink's new Go framing, budgets and tests are original MIT-0 code. Its design

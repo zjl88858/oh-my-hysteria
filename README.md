@@ -1,7 +1,7 @@
 # oh-my-hysteria
 
-基于 [Hysteria 2](https://github.com/HyNetworks/hysteria) 的增强版代理工具。**v1.0.0**
-提供更多拥塞控制选择和可选的 Blink UDP 混淆，保留 Hysteria2 的常用配置与分享链接。
+基于 [Hysteria 2](https://github.com/HyNetworks/hysteria) 的增强版代理工具。**v1.1.0**
+提供更多拥塞控制选择和可选的 Blink / Presto / Trident / Carakan UDP 混淆，保留 Hysteria2 的常用配置与分享链接。
 
 [下载 Releases](https://github.com/zjl88858/oh-my-hysteria/releases) ·
 [项目仓库](https://github.com/zjl88858/oh-my-hysteria) ·
@@ -11,7 +11,7 @@
 
 - **拥塞控制**：默认 BBR，支持 Reno、CUBIC，以及实验性 BBRv3、COPA、Geodesic。
 - **启动与预设**：CUBIC / Reno 可启用 HyStart++；BBR / BBRv3 提供保守、标准、激进三档。
-- **混淆**：支持 Salamander、Gecko，以及具有认证封装、动态填充和可选分片的实验性 Blink。
+- **混淆**：支持 Salamander、Gecko、Blink、Presto 流量语法、Trident 字节码方言和 Carakan 降熵整形。
 - **代理方式**：SOCKS5、HTTP、TCP / UDP 转发、TUN 等 Hysteria2 功能继续可用。
 
 ## 目录
@@ -169,14 +169,90 @@ ignoreClientBandwidth: true
 
 两端的混淆类型和混淆密码需要一致。**混淆密码与前面用于登录的 `auth` 是两项独立设置。**
 
+> Blink、Presto 为实验性功能，Trident、Carakan 为高度实验性功能。流量整形会增加开销，
+> 现有测试不构成抗识别或抗审查保证。部署要求与安全边界统一见[混淆共同说明](docs/obfuscation.md)。
+
 | `obfs.type` | 说明 |
 | --- | --- |
 | `plain` 或省略 `obfs` | 不加额外混淆，连接仍使用 QUIC / TLS |
 | `salamander` | Salamander 数据报混淆 |
 | `gecko` | Salamander 混淆，加上握手阶段的分片与填充 |
-| `blink` | 认证封装、动态填充和可选用户态分片；**实验性** |
+| `blink` | 认证封装、动态填充和可选用户态分片 |
+| `presto` | 单密码派生包长、转移、前导、分片和突发语法 |
+| `trident` | 单密码编译 64 指令 ISA，将认证密文编码为字节码并自动分片 |
+| `carakan` | 密码编译逆向 tANS 字节谱，自定义目标熵，自动分片与纠删修复 |
 
-### Blink（实验性）
+### Carakan
+
+在两端配置相同密码和目标熵：
+
+```yaml
+obfs:
+  type: carakan
+  carakan:
+    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
+    targetEntropy: 4.0
+```
+
+| 配置项 | 默认 / 范围 |
+| --- | --- |
+| `obfs.carakan.password` | 必填，32..1024 字节，建议至少 32 个随机字节生成的密码 |
+| `obfs.carakan.targetEntropy` | 省略为 **4.00 bits/byte**；支持 **1.00..7.50**，步长 **0.01**；两端必须一致 |
+
+Carakan 将认证密文输入逆向 tANS 状态机，输出密码派生的低熵字节谱。目标熵用于
+控制整形分布，短包实测值会受有限状态和边界影响；它是可逆整形，不是压缩。
+H 越低通常开销越大：符号层理想膨胀约 `8/H`，还需计入每片 52 字节认证封装及修复冗余。
+
+握手和数据统一自动分片：内层最大 1200 字节，外层 UDP payload 最大 1232 字节。
+1200 字节报文分为 2..13 个数据片，加 1..4 个认证修复片；收到足够合法片即可恢复缺片。
+当前仅提供带纠删修复的线格式 v3，旧开发构建需双端同时更新。
+
+配置、开销表和验证结果见 [Carakan](docs/carakan.md)。
+
+### Trident
+
+在两端配置相同的随机密码：
+
+```yaml
+obfs:
+  type: trident
+  trident:
+    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
+```
+
+唯一配置项 `obfs.trident.password` 必填，长度 **32..1024 字节**，建议至少 32 个随机字节
+生成的密码。密码编译出 64 个互不重复的操作码及各自的操作数长度、对齐规则；
+Byte-Split Packing 将认证加密后的载荷编码为可解析的自定义字节码，不执行指令。
+
+内层 QUIC 最大 1200 字节，自动分成最多 4 个独立认证片；1200 字节报文（含握手）
+必分成 3–4 片。外层 UDP payload 不超过 1232 字节，无需另配 MTU。
+每片有 84 字节认证封装，另加字节码编码开销；分片增加流量及丢包敏感性。
+协议及开销见 [Trident](docs/trident.md)。
+
+### Presto
+
+在两端配置同一个随机密码：
+
+```yaml
+obfs:
+  type: presto
+  presto:
+    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
+```
+
+Presto 只有一个配置项：`obfs.presto.password`，必填，长度 **32..1024 字节**，
+建议使用至少 32 个随机字节生成的密码（可用 Base64 保存）。
+程序从密码自动生成双向流量语法，每个会话再随机采样：
+
+- 包长的概率分布与相邻包长的转移关系。
+- 初次发送的前导形态、分片倾向，以及小突发之间的短暂间隔。
+- 同密码保持相对稳定的统计特征，但具体包序列不会固定；不同服务器请使用不同随机密码。
+
+外层 UDP payload 最大 1232 字节，内层 QUIC 最大 1200 字节，自动分片与重组，
+无需另配 MTU。填充最多为原始数据报长度的 1/3，另有每片 84 字节固定开销；
+分片与发送间隔会增加流量和时延。协议及验证结果见 [Presto](docs/presto.md)。
+
+### Blink
 
 在客户端、服务端都加入以下配置即可启用默认 Blink：
 
@@ -272,6 +348,10 @@ Blink 链接使用以下查询参数：
 
 使用 Blink 的两端都需要支持 Blink。分享链接包含连接凭证；拥塞控制和本地资源配额仍由各端配置选择。
 
+Presto 分享链接使用 `obfs=presto` 和 `obfs-password`，没有其他形态参数。
+Trident 分享链接使用 `obfs=trident` 和 `obfs-password`，同样只有密码参数。
+Carakan 使用 `obfs=carakan`、`obfs-password` 和可选 `carakan-target-entropy`；省略熵参数时为 4.00。
+
 ## 配置文件与日志
 
 使用 `-c` 指定配置最直接。未指定时，依次查找当前目录、`$HOME/.oh-my-hysteria/`、
@@ -335,7 +415,7 @@ python hyperbole.py build -r
 先在源码目录构建镜像：
 
 ```sh
-docker build -t oh-my-hysteria:1.0.0 .
+docker build -t oh-my-hysteria:1.1.0 .
 ```
 
 再在存放 `server.yaml`、`server.crt`、`server.key` 的配置目录启动：
@@ -344,7 +424,7 @@ docker build -t oh-my-hysteria:1.0.0 .
 docker run -d --name oh-my-hysteria \
   -p 443:443/udp \
   -v "$PWD:/etc/oh-my-hysteria:ro" \
-  oh-my-hysteria:1.0.0 server -c /etc/oh-my-hysteria/server.yaml
+  oh-my-hysteria:1.1.0 server -c /etc/oh-my-hysteria/server.yaml
 ```
 
 ## 更多文档
@@ -354,6 +434,11 @@ docker run -d --name oh-my-hysteria \
 - [BBRv3](docs/bbrv3-implementation.md) · [BBRv3 预设](docs/bbrv3-profiles.md)
 - [COPA](docs/copa.md) · [Geodesic](docs/geodesic.md)
 - [Blink 协议与资源预算](docs/blink.md)
+- [混淆共同说明与选型](docs/obfuscation.md)
+- [Presto 流量语法](docs/presto.md)
+- [Trident 字节码方言](docs/trident.md)
+- [Carakan 降熵整形](docs/carakan.md)
+- [v1.1.0 发布说明与准备清单](docs/release-v1.1.0.md)
 
 <details>
 <summary>贡献代码：运行测试</summary>

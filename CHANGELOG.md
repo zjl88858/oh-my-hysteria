@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.1.0
+
+- Add Carakan target-spectrum shaping with a configurable 1.00..7.50 bits/byte
+  target, compact 52-byte authenticated framing, cyclic interleaving, and bounded
+  Cauchy GF(256) erasure repair. Handshake and data use the same fragmentation path.
+  Only wire v3 is supported; update both endpoints together from development builds.
+- Add Trident: a password-compiled 64-instruction bytecode dialect with Byte-Split
+  Packing and independently authenticated fragments.
+- Add Presto: password-derived Markov packet lengths, prelude, fragmentation and
+  burst pacing, with bounded authenticated framing and reassembly.
+- Reorganize the three protocol guides around configuration, design, overhead and
+  validation. Consolidate deployment/security guidance and keep development records
+  separate from the current protocol documentation.
+- Align application, build tooling, lockfile and container examples on v1.1.0.
+
+Protocol details and deployment guidance: [obfuscation guide](docs/obfuscation.md).
+Release preparation: [v1.1.0 notes](docs/release-v1.1.0.md).
+
 ## v1.0.0
 
 - Add opt-in Blink L4 UDP framing: direction-separated XChaCha20-Poly1305,

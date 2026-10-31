@@ -10,7 +10,7 @@ import (
 
 // ApplyPacketConnLimit is opt-in: raw UDP, Salamander and Gecko keep their
 // existing behavior. An envelope cannot use inner QUIC PMTU success as proof
-// of a larger outer UDP path MTU. Blink currently exposes exactly 1200.
+// of a larger outer UDP path MTU. Blink, Presto, Trident and Carakan expose 1200.
 func ApplyPacketConnLimit(pc net.PacketConn, conf *quic.Config) bool {
 	limited, ok := pc.(interface{ QUICPacketSizeLimit() int })
 	if !ok {

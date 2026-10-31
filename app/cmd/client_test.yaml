@@ -39,6 +39,13 @@ obfs:
     maxSessions: 128
     maxReassemblyBytes: 65536
     verifyPacketsPerSecond: 4096
+  presto:
+    password: presto-config-fixture-test-only-secret
+  trident:
+    password: trident-config-fixture-test-only-secret
+  carakan:
+    password: carakan-config-fixture-test-only-secret
+    targetEntropy: 4.5
 
 tls:
   sni: another.example.com

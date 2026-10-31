@@ -150,6 +150,9 @@ type clientConfigObfs struct {
 	Salamander clientConfigObfsSalamander `mapstructure:"salamander"`
 	Gecko      clientConfigObfsGecko      `mapstructure:"gecko"`
 	Blink      configObfsBlink            `mapstructure:"blink"`
+	Presto     configObfsPresto           `mapstructure:"presto"`
+	Trident    configObfsTrident          `mapstructure:"trident"`
+	Carakan    configObfsCarakan          `mapstructure:"carakan"`
 }
 
 type clientConfigTLS struct {
@@ -273,8 +276,17 @@ func (c *clientConfig) fillServerAddr(hyConfig *client.Config) error {
 // fillConnFactory must be called after fillServerAddr, since the right kind
 // of inner conn (plain vs port-hopping) depends on the resolved server addr.
 func (c *clientConfig) fillConnFactory(hyConfig *client.Config) error {
+	if strings.EqualFold(c.Obfs.Type, "carakan") && hyConfig.ServerAddr != nil && hyConfig.ServerAddr.Network() == "udphop" {
+		return configError{Field: "obfs.carakan", Err: errors.New("Carakan does not support port hopping")}
+	}
+	if strings.EqualFold(c.Obfs.Type, "trident") && hyConfig.ServerAddr != nil && hyConfig.ServerAddr.Network() == "udphop" {
+		return configError{Field: "obfs.trident", Err: errors.New("Trident does not support port hopping")}
+	}
 	if strings.EqualFold(c.Obfs.Type, "blink") && hyConfig.ServerAddr != nil && hyConfig.ServerAddr.Network() == "udphop" {
 		return configError{Field: "obfs.blink", Err: errors.New("Blink does not support port hopping")}
+	}
+	if strings.EqualFold(c.Obfs.Type, "presto") && hyConfig.ServerAddr != nil && hyConfig.ServerAddr.Network() == "udphop" {
+		return configError{Field: "obfs.presto", Err: errors.New("Presto does not support port hopping")}
 	}
 	so, err := c.socketOptions()
 	if err != nil {
@@ -338,6 +350,24 @@ func (c *clientConfig) socketOptions() (*sockopts.SocketOptions, error) {
 
 func (c *clientConfig) wrapObfs(conn net.PacketConn) (net.PacketConn, error) {
 	switch strings.ToLower(c.Obfs.Type) {
+	case "carakan":
+		wrapped, err := obfs.WrapPacketConnCarakan(conn, c.Obfs.Carakan.options(false))
+		if err != nil {
+			return nil, configError{Field: "obfs.carakan", Err: err}
+		}
+		return wrapped, nil
+	case "trident":
+		wrapped, err := obfs.WrapPacketConnTrident(conn, c.Obfs.Trident.options(false))
+		if err != nil {
+			return nil, configError{Field: "obfs.trident", Err: err}
+		}
+		return wrapped, nil
+	case "presto":
+		wrapped, err := obfs.WrapPacketConnPresto(conn, c.Obfs.Presto.options(false))
+		if err != nil {
+			return nil, configError{Field: "obfs.presto", Err: err}
+		}
+		return wrapped, nil
 	case "blink":
 		wrapped, err := obfs.WrapPacketConnBlink(conn, c.Obfs.Blink.options(false))
 		if err != nil {
@@ -556,6 +586,18 @@ func (c *clientConfig) URI() string {
 	case "gecko":
 		q.Set("obfs", "gecko")
 		q.Set("obfs-password", c.Obfs.Gecko.Password)
+	case "presto":
+		q.Set("obfs", "presto")
+		q.Set("obfs-password", c.Obfs.Presto.Password)
+	case "trident":
+		q.Set("obfs", "trident")
+		q.Set("obfs-password", c.Obfs.Trident.Password)
+	case "carakan":
+		q.Set("obfs", "carakan")
+		q.Set("obfs-password", c.Obfs.Carakan.Password)
+		if c.Obfs.Carakan.TargetEntropy != nil {
+			q.Set("carakan-target-entropy", strconv.FormatFloat(*c.Obfs.Carakan.TargetEntropy, 'f', -1, 64))
+		}
 	case "blink":
 		q.Set("obfs", "blink")
 		q.Set("obfs-password", c.Obfs.Blink.Password)
@@ -639,6 +681,20 @@ func (c *clientConfig) parseURI() bool {
 			c.Obfs.Salamander.Password = q.Get("obfs-password")
 		case "gecko":
 			c.Obfs.Gecko.Password = q.Get("obfs-password")
+		case "presto":
+			c.Obfs.Presto.Password = q.Get("obfs-password")
+		case "trident":
+			c.Obfs.Trident.Password = q.Get("obfs-password")
+		case "carakan":
+			c.Obfs.Carakan.Password = q.Get("obfs-password")
+			c.Obfs.Carakan.TargetEntropy = nil
+			if q.Has("carakan-target-entropy") {
+				n, err := strconv.ParseFloat(q.Get("carakan-target-entropy"), 64)
+				if err != nil {
+					n = -1
+				}
+				c.Obfs.Carakan.TargetEntropy = &n
+			}
 		case "blink":
 			c.Obfs.Blink.Password = q.Get("obfs-password")
 			c.Obfs.Blink.Fragmentation = q.Get("blink-fragmentation") == "1"
@@ -867,7 +923,12 @@ func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
 	if mapper != nil {
 		mapCtx, mapCancel := context.WithCancel(context.Background())
 		go realmPortMapLoop(mapCtx, addr.RealmID, mapper)
-		finalConn = &cleanupPacketConn{PacketConn: finalConn, cleanup: mapCancel}
+		cleanupConn := &cleanupPacketConn{PacketConn: finalConn, cleanup: mapCancel}
+		if limit, ok := finalConn.(interface{ QUICPacketSizeLimit() int }); ok {
+			finalConn = &limitedCleanupPacketConn{cleanupPacketConn: cleanupConn, limit: limit.QUICPacketSizeLimit()}
+		} else {
+			finalConn = cleanupConn
+		}
 	}
 	hyConfig.ConnFactory = &singleUseConnFactory{
 		Open: func() (net.PacketConn, error) { return finalConn, nil },
