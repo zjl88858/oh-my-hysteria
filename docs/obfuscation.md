@@ -13,6 +13,9 @@ Hysteria2 / QUIC / TLS 完成。功能状态见 [README](../README.md#混淆配�
 | [Presto](presto.md) | 密码派生包长、转移和突发节奏 | 填充、分片及短暂发送间隔 |
 | [Trident](trident.md) | 将认证密文编码为密码派生字节码 | 编码膨胀和分片 |
 | [Carakan](carakan.md) | 可调低熵字节谱与纠删修复 | 降熵膨胀及修复冗余 |
+| [Servo](servo.md) | 跨数据报装箱、密码派生容量 | 52B/容器、10B/记录及短暂聚合等待 |
+| [Tasman](tasman.md) | 短块纠删、预算载波 | 符号零尾、有限修复/cover及tiny例外 |
+| [Mariner](mariner.md) | 包内高阶非线性关系、交织 | 25%..31.25%结构冗余及每片封装 |
 
 这些选项互斥，不会叠加。默认不启用额外混淆；选择混淆不改变默认 BBR、已有预设或
 Brutal 带宽协商规则。
@@ -20,25 +23,26 @@ Brutal 带宽协商规则。
 ## 部署要求
 
 - 两端选择相同类型和协议格式，并配置相同混淆密码。Carakan 的目标熵也必须相同。
-- 混淆密码与代理登录的 `auth` 独立。Presto、Trident、Carakan 接受 32..1024 字节，
+- 混淆密码与代理登录的 `auth` 独立。Presto、Trident、Carakan、Servo、Tasman、Mariner 接受 32..1024 字节，
   建议使用至少 32 个随机字节生成的秘密；例如运行以下命令，将完整输出用作密码：
 
   ```sh
   python -c "import secrets; print(secrets.token_urlsafe(32))"
   ```
 
-- Blink、Presto、Trident、Carakan 的新会话准入要求两端时钟差不超过 30 秒，
+- Blink、Presto、Trident、Carakan、Servo、Tasman、Mariner 的新会话准入要求两端时钟差不超过 30 秒，
   且不支持端口跳跃。请保持系统时间同步，使用固定服务端 UDP 端口。
 - 这些认证封装将内层 QUIC 限制为 1200 字节并关闭其 PMTU 探测；Presto、Trident、
-  Carakan 的外层 UDP payload 上限为 1232 字节，Blink 按自身配置限制。
+  Carakan、Servo、Tasman、Mariner 的外层 UDP payload 上限为 1232 字节，Blink 按自身配置限制。
 - 保持正常 TLS 证书校验。更换协议或密码时同时更新两端；连接失败不会自动改用其他混淆。
+- Servo/Tasman使用有限异步发送队列，错误消费和排队上限见协议页；Mariner同步发送。
 - 分享链接包含连接凭证，应按密码管理。使用 `share -c client.yaml` 生成链接。
 
 ## 安全与观测边界
 
 密码派生的形态不是独立的保密层：同密码服务器可能被关联，共同编码结构、字节谱、
 包长和时序也可能形成家族指纹。Trident 的字节码只做编码、不执行；Carakan 的低熵
-输出也不等于自然应用协议。各方案均未建立通用外部识别系统下的不可区分性证明。
+输出也不等于自然应用协议。
 
 共享密码不是 PAKE，HKDF 不会增强弱口令；形态和认证标签可能辅助离线猜测。
 外层没有独立的前向保密握手。接收器先认证再建立会话，限制验签、准入及重组资源，
@@ -52,9 +56,8 @@ Brutal 带宽协商规则。
 各协议页只列当前实现的结果与复现入口。短连接、回环实验和微基准分别验证不同问题，
 不作为长期吞吐排名。公网测试的构建类型、负载与样本量单独注明。
 
-除非特别标明，封装倍率仅计 UDP payload，不含 IP/UDP 头、QUIC 重传或运营商计费
-开销；IPv4 捕获字节包含更多协议成本，不能与封装倍率直接比较。捕获丢包计数为零
-仅表示捕获器未报告丢包。
+封装倍率为外层UDP payload / 已接受内层payload，QUIC再次提交的重传也算输入；
+它不等于应用唯一有效字节的倍率。IP头成本和公网IPv4累计字节另报，不能直接混用。
 
 开发过程、旧版对照、失败记录和环境限制统一保留在 [构建与验证历史](../BUILD-REPORT.md)，
 不作为可选择的旧协议或发布附件。
