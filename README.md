@@ -1,7 +1,10 @@
 # oh-my-hysteria
 
-基于 [Hysteria 2](https://github.com/HyNetworks/hysteria) 的增强版代理工具。**v1.1.0**
-提供更多拥塞控制选择和可选的 Blink / Presto / Trident / Carakan UDP 混淆，保留 Hysteria2 的常用配置与分享链接。
+基于 [Hysteria 2](https://github.com/HyNetworks/hysteria) 的增强版代理工具。**v1.2.0**
+提供更多拥塞控制选择和可选 UDP 混淆，保留 Hysteria2 的常用配置与分享链接。
+
+本版新增 [Servo 跨数据报装箱](docs/servo.md)、[Tasman 纠删载波](docs/tasman.md) 与
+[Mariner 非线性关系织网](docs/mariner.md)。当前处于[发布准备](docs/release-v1.2.0.md)。
 
 [下载 Releases](https://github.com/zjl88858/oh-my-hysteria/releases) ·
 [项目仓库](https://github.com/zjl88858/oh-my-hysteria) ·
@@ -11,7 +14,7 @@
 
 - **拥塞控制**：默认 BBR，支持 Reno、CUBIC，以及实验性 BBRv3、COPA、Geodesic。
 - **启动与预设**：CUBIC / Reno 可启用 HyStart++；BBR / BBRv3 提供保守、标准、激进三档。
-- **混淆**：支持 Salamander、Gecko、Blink、Presto 流量语法、Trident 字节码方言和 Carakan 降熵整形。
+- **混淆**：Salamander、Gecko、Blink、Presto、Trident、Carakan，以及 Servo、Tasman、Mariner。
 - **代理方式**：SOCKS5、HTTP、TCP / UDP 转发、TUN 等 Hysteria2 功能继续可用。
 
 ## 目录
@@ -169,8 +172,7 @@ ignoreClientBandwidth: true
 
 两端的混淆类型和混淆密码需要一致。**混淆密码与前面用于登录的 `auth` 是两项独立设置。**
 
-> Blink、Presto 为实验性功能，Trident、Carakan 为高度实验性功能。流量整形会增加开销，
-> 现有测试不构成抗识别或抗审查保证。部署要求与安全边界统一见[混淆共同说明](docs/obfuscation.md)。
+部署要求、成本和验证范围统一见[混淆说明](docs/obfuscation.md)。新增整形模式为实验功能，按需启用。
 
 | `obfs.type` | 说明 |
 | --- | --- |
@@ -181,6 +183,46 @@ ignoreClientBandwidth: true
 | `presto` | 单密码派生包长、转移、前导、分片和突发语法 |
 | `trident` | 单密码编译 64 指令 ISA，将认证密文编码为字节码并自动分片 |
 | `carakan` | 密码编译逆向 tANS 字节谱，自定义目标熵，自动分片与纠删修复 |
+| `servo` | 密码派生容量，跨数据报装箱，每条数据报最多两个认证容器 |
+| `tasman` | 短块纠删、有限载波与约2×预算，tiny例外独立计数 |
+| `mariner` | 密码编译的非线性字节关系、交织与最多两片封装 |
+
+### Mariner
+
+```yaml
+obfs:
+  type: mariner
+  mariner:
+    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
+```
+
+只需同一随机密码，图、非线性双射表与密度自动编译。内层最大1200B，外层UDP payload
+最大1232B；没有cover、额外等待或FEC。格式、成本和验证结果见 [Mariner](docs/mariner.md)。
+
+### Tasman
+
+```yaml
+obfs:
+  type: tasman
+  tasman:
+    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
+```
+
+两端同密码；内层1200B、外层UDP payload≤1232B，跨报文装箱并按预算发送有限修复。
+配置、tiny例外、异步错误与保守QUIC预留的边界见 [Tasman](docs/tasman.md)。
+
+### Servo
+
+```yaml
+obfs:
+  type: servo
+  servo:
+    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
+```
+
+两端使用相同混淆密码。Servo 不主动填充或发送 cover，使用有限异步队列聚合不同
+QUIC 数据报。内层最大 1200B，外层 UDP payload 最大 1232B；迟到/失败消息由 QUIC
+自行恢复。配置、异步错误和验证边界见 [Servo](docs/servo.md)。
 
 ### Carakan
 
@@ -351,6 +393,7 @@ Blink 链接使用以下查询参数：
 Presto 分享链接使用 `obfs=presto` 和 `obfs-password`，没有其他形态参数。
 Trident 分享链接使用 `obfs=trident` 和 `obfs-password`，同样只有密码参数。
 Carakan 使用 `obfs=carakan`、`obfs-password` 和可选 `carakan-target-entropy`；省略熵参数时为 4.00。
+Servo、Tasman、Mariner 分别使用 `obfs=servo|tasman|mariner` 和 `obfs-password`。
 
 ## 配置文件与日志
 
@@ -387,9 +430,12 @@ Carakan 使用 `obfs=carakan`、`obfs-password` 和可选 `carakan-target-entrop
 
 ## 源码构建与容器
 
+工作区使用Go 1.26.10工具链；Go会按`go.work`自动选择。该补丁系列包含Windows异步
+抢占崩溃修复，Windows构建不要使用1.26.0/1.26.1。
+
 ### 本机与交叉编译
 
-需要 **Go 1.26.0+** 和 **Python 3.11+**。在完整源码根目录运行，保留其中的 `third_party/` 目录：
+使用 **Go 1.26.10** 和 **Python 3.11+**。在完整源码根目录运行，保留其中的 `third_party/` 目录：
 
 ```sh
 python hyperbole.py build -r
@@ -415,7 +461,7 @@ python hyperbole.py build -r
 先在源码目录构建镜像：
 
 ```sh
-docker build -t oh-my-hysteria:1.1.0 .
+docker build -t oh-my-hysteria:1.2.0 .
 ```
 
 再在存放 `server.yaml`、`server.crt`、`server.key` 的配置目录启动：
@@ -424,7 +470,7 @@ docker build -t oh-my-hysteria:1.1.0 .
 docker run -d --name oh-my-hysteria \
   -p 443:443/udp \
   -v "$PWD:/etc/oh-my-hysteria:ro" \
-  oh-my-hysteria:1.1.0 server -c /etc/oh-my-hysteria/server.yaml
+  oh-my-hysteria:1.2.0 server -c /etc/oh-my-hysteria/server.yaml
 ```
 
 ## 更多文档
@@ -439,6 +485,8 @@ docker run -d --name oh-my-hysteria \
 - [Trident 字节码方言](docs/trident.md)
 - [Carakan 降熵整形](docs/carakan.md)
 - [v1.1.0 发布说明与准备清单](docs/release-v1.1.0.md)
+- [v1.2.0 发布说明与准备清单](docs/release-v1.2.0.md)
+- [Servo](docs/servo.md) · [Tasman](docs/tasman.md) · [Mariner](docs/mariner.md)
 
 <details>
 <summary>贡献代码：运行测试</summary>

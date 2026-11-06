@@ -123,6 +123,9 @@ type serverConfigObfs struct {
 	Presto     configObfsPresto           `mapstructure:"presto"`
 	Trident    configObfsTrident          `mapstructure:"trident"`
 	Carakan    configObfsCarakan          `mapstructure:"carakan"`
+	Servo      configObfsServo            `mapstructure:"servo"`
+	Tasman     configObfsTasman           `mapstructure:"tasman"`
+	Mariner    configObfsMariner          `mapstructure:"mariner"`
 }
 
 type serverConfigTLS struct {
@@ -437,6 +440,12 @@ func (c *serverConfig) fillRealmConn(hyConfig *server.Config, addr *realm.Addr) 
 
 func (c *serverConfig) wrapObfs(conn net.PacketConn) (net.PacketConn, error) {
 	switch strings.ToLower(c.Obfs.Type) {
+	case "mariner":
+		return wrapMarinerConfig(conn, c.Obfs.Mariner, true)
+	case "tasman":
+		return wrapTasmanConfig(conn, c.Obfs.Tasman, true)
+	case "servo":
+		return wrapServoConfig(conn, c.Obfs.Servo, true)
 	case "carakan":
 		wrapped, err := obfs.WrapPacketConnCarakan(conn, c.Obfs.Carakan.options(true))
 		if err != nil {

@@ -24,7 +24,7 @@ class BuildToolTests(unittest.TestCase):
     def test_default_version_ignores_upstream_tags_and_environment(self):
         with mock.patch.dict(os.environ, {"HY_APP_VERSION": "v2.99.0"}, clear=True):
             with mock.patch.object(subprocess, "check_output") as git:
-                self.assertEqual(hyperbole.get_app_version(), "v1.1.0")
+                self.assertEqual(hyperbole.get_app_version(), "v1.2.0")
                 git.assert_not_called()
 
     def test_release_version_is_consistent(self):
@@ -41,6 +41,11 @@ class BuildToolTests(unittest.TestCase):
         self.assertIn(f"**{version}**", readme)
         self.assertIn(f"oh-my-hysteria:{project['version']}", readme)
         self.assertIn(f"## {version}", (root / "CHANGELOG.md").read_text(encoding="utf-8"))
+
+    def test_workspace_recommends_patched_toolchain(self):
+        workspace = (hyperbole.PROJECT_ROOT / "go.work").read_text()
+        version = re.search(r"(?m)^toolchain go(\d+\.\d+\.\d+)$", workspace).group(1)
+        self.assertGreaterEqual(hyperbole.parse_go_version(version), (1, 26, 2))
 
     def test_version_override(self):
         with mock.patch.dict(os.environ, {"OH_MY_HYSTERIA_VERSION": "v1.1.0-test"}):

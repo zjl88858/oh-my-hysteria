@@ -33,6 +33,12 @@ obfs:
     verifyPacketsPerSecond: 4096
   presto:
     password: presto-config-fixture-test-only-secret
+  servo:
+    password: servo-config-fixture-test-only-secret
+  tasman:
+    password: tasman-config-fixture-test-only-secret
+  mariner:
+    password: mariner-config-fixture-test-only-secret
   trident:
     password: trident-config-fixture-test-only-secret
   carakan:

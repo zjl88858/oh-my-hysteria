@@ -149,8 +149,9 @@ type Conn struct {
 	connIDManager   *connIDManager
 	connIDGenerator *connIDGenerator
 
-	rttStats  *utils.RTTStats
-	connStats utils.ConnectionStats
+	rttStats        *utils.RTTStats
+	outerRecoveries uint64
+	connStats       utils.ConnectionStats
 
 	cryptoStreamManager   *cryptoStreamManager
 	sentPacketHandler     ackhandler.SentPacketHandler
@@ -2560,7 +2561,7 @@ func (c *Conn) sendPackets(now monotime.Time) error {
 		ecn := c.sentPacketHandler.ECNMode(true)
 		c.logShortHeaderPacket(p, ecn, buf.Len())
 		c.registerPackedShortHeaderPacket(p, ecn, now)
-		c.sendQueue.Send(buf, 0, ecn)
+		c.enqueuePacket(buf, 0, ecn, now)
 		// There's (likely) more data to send. Loop around again.
 		c.scheduleSending()
 		return nil
@@ -2610,7 +2611,7 @@ func (c *Conn) sendPacketsWithoutGSO(now monotime.Time) error {
 			return err
 		}
 
-		c.sendQueue.Send(buf, 0, ecn)
+		c.enqueuePacket(buf, 0, ecn, now)
 
 		if c.sendQueue.WouldBlock() {
 			return nil
@@ -2681,7 +2682,7 @@ func (c *Conn) sendPacketsWithGSO(now monotime.Time) error {
 			continue
 		}
 
-		c.sendQueue.Send(buf, uint16(maxSize), ecn)
+		c.enqueuePacket(buf, uint16(maxSize), ecn, now)
 
 		if dontSendMore {
 			return nil
@@ -2735,11 +2736,12 @@ func (c *Conn) maybeSendAckOnlyPacket(now monotime.Time) error {
 	}
 	c.logShortHeaderPacket(p, ecn, buf.Len())
 	c.registerPackedShortHeaderPacket(p, ecn, now)
-	c.sendQueue.Send(buf, 0, ecn)
+	c.enqueuePacket(buf, 0, ecn, now)
 	return nil
 }
 
 func (c *Conn) sendProbePacket(sendMode ackhandler.SendMode, now monotime.Time) error {
+	c.observeAsyncTransport(true)
 	var encLevel protocol.EncryptionLevel
 	//nolint:exhaustive // We only need to handle the PTO send modes here.
 	switch sendMode {
@@ -2802,7 +2804,7 @@ func (c *Conn) registerPackedShortHeaderPacket(p shortHeaderPacket, ecn protocol
 			p.Frames,
 			protocol.Encryption1RTT,
 			ecn,
-			p.Length,
+			c.reservedPacketCost(p.Length),
 			p.IsPathMTUProbePacket,
 			true,
 		)
@@ -2824,7 +2826,7 @@ func (c *Conn) registerPackedShortHeaderPacket(p shortHeaderPacket, ecn protocol
 		p.Frames,
 		protocol.Encryption1RTT,
 		ecn,
-		p.Length,
+		c.reservedPacketCost(p.Length),
 		p.IsPathMTUProbePacket,
 		false,
 	)
@@ -2849,7 +2851,7 @@ func (c *Conn) sendPackedCoalescedPacket(packet *coalescedPacket, ecn protocol.E
 			p.frames,
 			p.EncryptionLevel(),
 			ecn,
-			p.length,
+			c.reservedPacketCost(p.length),
 			false,
 			false,
 		)
@@ -2876,13 +2878,13 @@ func (c *Conn) sendPackedCoalescedPacket(packet *coalescedPacket, ecn protocol.E
 			p.Frames,
 			protocol.Encryption1RTT,
 			ecn,
-			p.Length,
+			c.reservedPacketCost(p.Length),
 			p.IsPathMTUProbePacket,
 			false,
 		)
 	}
 	c.connIDManager.SentPacket()
-	c.sendQueue.Send(packet.buffer, 0, ecn)
+	c.enqueuePacket(packet.buffer, 0, ecn, now)
 	return nil
 }
 

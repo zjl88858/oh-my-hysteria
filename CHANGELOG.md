@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.2.0 (release preparation)
+
+- Add opt-in Mariner: password-compiled nonlinear byte relations, interleaving,
+  direction-separated authenticated envelopes and balanced two-fragment delivery.
+  Include bounded authenticated graph caches, configuration and share URIs.
+- Use Go1.26.10 for candidate builds, including the Windows runtime preemption fix.
+  Make certificate-loader tests use the standard loopback and an ephemeral port.
+
+- Add opt-in Tasman short-block Cauchy erasure containers, bounded carrier queues,
+  explicit data/repair reservations, counted tiny exceptions and finite cover.
+  Integrate configuration/share URIs and conservative QUIC wire reservations.
+  Recovery feedback is budget-limited; this is not exact outer loss/ECN control.
+
+- Add opt-in Servo: password-derived cross-datagram containers, a two-container
+  fragmentation reservation, bounded asynchronous admission and fair peer scheduling.
+  Integrate client/server configuration, share URIs, failure notification and statistics.
+- Observe original QUIC send timestamps, RTT/PTO and loss snapshots for asynchronous
+  PacketConns without changing existing congestion-control accounting or defaults.
+
+Application version: v1.2.0. See [release notes](docs/release-v1.2.0.md),
+[Servo](docs/servo.md), [Tasman](docs/tasman.md) and [Mariner](docs/mariner.md).
+Tag and Release are not yet published.
+
 ## v1.1.0
 
 - Add Carakan target-spectrum shaping with a configurable 1.00..7.50 bits/byte

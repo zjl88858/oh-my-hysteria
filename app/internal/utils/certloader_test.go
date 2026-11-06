@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	testListen   = "127.82.39.147:12947"
+	testListen   = "127.0.0.1:0"
 	testCAFile   = "./testcerts/ca"
 	testCertFile = "./testcerts/cert"
 	testKeyFile  = "./testcerts/key"
@@ -49,9 +49,9 @@ func TestCertificateLoaderFullChain(t *testing.T) {
 	defer lis.Close()
 	go http.Serve(lis, nil)
 
-	assert.Error(t, runTestTLSClient("unmatched-sni.example.com"))
-	assert.Error(t, runTestTLSClient(""))
-	assert.NoError(t, runTestTLSClient("example.com"))
+	assert.Error(t, runTestTLSClient(lis.Addr().String(), "unmatched-sni.example.com"))
+	assert.Error(t, runTestTLSClient(lis.Addr().String(), ""))
+	assert.NoError(t, runTestTLSClient(lis.Addr().String(), "example.com"))
 }
 
 func TestCertificateLoaderNoSAN(t *testing.T) {
@@ -71,7 +71,7 @@ func TestCertificateLoaderNoSAN(t *testing.T) {
 	defer lis.Close()
 	go http.Serve(lis, nil)
 
-	assert.NoError(t, runTestTLSClient(""))
+	assert.NoError(t, runTestTLSClient(lis.Addr().String(), ""))
 }
 
 func TestCertificateLoaderReplaceCertificate(t *testing.T) {
@@ -91,13 +91,13 @@ func TestCertificateLoaderReplaceCertificate(t *testing.T) {
 	defer lis.Close()
 	go http.Serve(lis, nil)
 
-	assert.NoError(t, runTestTLSClient("example.com"))
-	assert.Error(t, runTestTLSClient("2.example.com"))
+	assert.NoError(t, runTestTLSClient(lis.Addr().String(), "example.com"))
+	assert.Error(t, runTestTLSClient(lis.Addr().String(), "2.example.com"))
 
 	assert.NoError(t, generateTestCertificate([]string{"2.example.com"}, "fullchain"))
 
-	assert.Error(t, runTestTLSClient("example.com"))
-	assert.NoError(t, runTestTLSClient("2.example.com"))
+	assert.Error(t, runTestTLSClient(lis.Addr().String(), "example.com"))
+	assert.NoError(t, runTestTLSClient(lis.Addr().String(), "2.example.com"))
 }
 
 func generateTestCertificate(dnssan []string, certType string) error {
@@ -120,10 +120,10 @@ func generateTestCertificate(dnssan []string, certType string) error {
 	return nil
 }
 
-func runTestTLSClient(sni string) error {
+func runTestTLSClient(server, sni string) error {
 	args := []string{
 		"certloader_test_tlsclient.py",
-		"--server", testListen,
+		"--server", server,
 		"--ca", testCAFile,
 	}
 	if sni != "" {

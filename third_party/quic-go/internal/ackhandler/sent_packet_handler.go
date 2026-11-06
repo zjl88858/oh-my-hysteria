@@ -99,6 +99,7 @@ type sentPacketHandler struct {
 	pendingHistoryRemovals []protocol.PacketNumber
 
 	bytesInFlight            protocol.ByteCount
+	outerRecoveryUntil       monotime.Time
 	applicationBytesInFlight protocol.ByteCount
 
 	congestion      congestion.SendAlgorithmWithDebugInfos
@@ -746,7 +747,7 @@ func (h *sentPacketHandler) getPTOTimeAndSpace(now monotime.Time) (pto monotime.
 	// because before that, we don't have the keys to decrypt ACKs sent in 1-RTT packets.
 	if !h.handshakeConfirmed && !h.hasOutstandingCryptoPackets() {
 		if h.peerCompletedAddressValidation {
-			return
+			return pto, encLevel
 		}
 		t := now.Add(h.getScaledPTO(false))
 		if h.initialPackets != nil {
@@ -1170,11 +1171,33 @@ func (h *sentPacketHandler) SendMode(now monotime.Time) SendMode {
 	if !cc.HasPacingBudget(now) {
 		return SendPacingLimited
 	}
+	if h.outerRecoveryUntil != 0 && now < h.outerRecoveryUntil {
+		return SendPacingLimited
+	}
 	return SendAny
 }
 
 func (h *sentPacketHandler) TimeUntilSend() monotime.Time {
-	return h.getCongestionControl().TimeUntilSend(h.bytesInFlight)
+	legacy := h.getCongestionControl().TimeUntilSend(h.bytesInFlight)
+	if h.outerRecoveryUntil == 0 {
+		return legacy
+	}
+	if legacy == 0 {
+		return h.outerRecoveryUntil
+	}
+	return max(h.outerRecoveryUntil, legacy)
+}
+
+// Authenticated FEC recovery reports are congestion evidence even when the
+// inner packet is ACKed. A conservative RTT-sized pacing guard, not fake
+// QUIC loss/ACK events. PTO probes still retain their existing exception.
+func (h *sentPacketHandler) ObserveOuterRecovery(now monotime.Time) {
+	d := max(time.Millisecond, h.rttStats.SmoothedRTT())
+	d = min(d, 100*time.Millisecond)
+	until := now.Add(d)
+	if h.outerRecoveryUntil == 0 || until > h.outerRecoveryUntil {
+		h.outerRecoveryUntil = until
+	}
 }
 
 func (h *sentPacketHandler) SetMaxDatagramSize(s protocol.ByteCount) {

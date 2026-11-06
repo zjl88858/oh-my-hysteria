@@ -153,6 +153,9 @@ type clientConfigObfs struct {
 	Presto     configObfsPresto           `mapstructure:"presto"`
 	Trident    configObfsTrident          `mapstructure:"trident"`
 	Carakan    configObfsCarakan          `mapstructure:"carakan"`
+	Servo      configObfsServo            `mapstructure:"servo"`
+	Tasman     configObfsTasman           `mapstructure:"tasman"`
+	Mariner    configObfsMariner          `mapstructure:"mariner"`
 }
 
 type clientConfigTLS struct {
@@ -276,6 +279,15 @@ func (c *clientConfig) fillServerAddr(hyConfig *client.Config) error {
 // fillConnFactory must be called after fillServerAddr, since the right kind
 // of inner conn (plain vs port-hopping) depends on the resolved server addr.
 func (c *clientConfig) fillConnFactory(hyConfig *client.Config) error {
+	if strings.EqualFold(c.Obfs.Type, "mariner") && hyConfig.ServerAddr != nil && hyConfig.ServerAddr.Network() == "udphop" {
+		return configError{Field: "obfs.mariner", Err: errors.New("Mariner does not support port hopping")}
+	}
+	if strings.EqualFold(c.Obfs.Type, "tasman") && hyConfig.ServerAddr != nil && hyConfig.ServerAddr.Network() == "udphop" {
+		return configError{Field: "obfs.tasman", Err: errors.New("Tasman does not support port hopping")}
+	}
+	if strings.EqualFold(c.Obfs.Type, "servo") && hyConfig.ServerAddr != nil && hyConfig.ServerAddr.Network() == "udphop" {
+		return configError{Field: "obfs.servo", Err: errors.New("Servo does not support port hopping")}
+	}
 	if strings.EqualFold(c.Obfs.Type, "carakan") && hyConfig.ServerAddr != nil && hyConfig.ServerAddr.Network() == "udphop" {
 		return configError{Field: "obfs.carakan", Err: errors.New("Carakan does not support port hopping")}
 	}
@@ -350,6 +362,12 @@ func (c *clientConfig) socketOptions() (*sockopts.SocketOptions, error) {
 
 func (c *clientConfig) wrapObfs(conn net.PacketConn) (net.PacketConn, error) {
 	switch strings.ToLower(c.Obfs.Type) {
+	case "mariner":
+		return wrapMarinerConfig(conn, c.Obfs.Mariner, false)
+	case "tasman":
+		return wrapTasmanConfig(conn, c.Obfs.Tasman, false)
+	case "servo":
+		return wrapServoConfig(conn, c.Obfs.Servo, false)
 	case "carakan":
 		wrapped, err := obfs.WrapPacketConnCarakan(conn, c.Obfs.Carakan.options(false))
 		if err != nil {
@@ -580,6 +598,15 @@ func (c *clientConfig) fillFastOpen(hyConfig *client.Config) error {
 func (c *clientConfig) URI() string {
 	q := url.Values{}
 	switch strings.ToLower(c.Obfs.Type) {
+	case "mariner":
+		q.Set("obfs", "mariner")
+		q.Set("obfs-password", c.Obfs.Mariner.Password)
+	case "tasman":
+		q.Set("obfs", "tasman")
+		q.Set("obfs-password", c.Obfs.Tasman.Password)
+	case "servo":
+		q.Set("obfs", "servo")
+		q.Set("obfs-password", c.Obfs.Servo.Password)
 	case "salamander":
 		q.Set("obfs", "salamander")
 		q.Set("obfs-password", c.Obfs.Salamander.Password)
@@ -677,6 +704,12 @@ func (c *clientConfig) parseURI() bool {
 	if obfsType := q.Get("obfs"); obfsType != "" {
 		c.Obfs.Type = obfsType
 		switch strings.ToLower(obfsType) {
+		case "mariner":
+			c.Obfs.Mariner.Password = q.Get("obfs-password")
+		case "tasman":
+			c.Obfs.Tasman.Password = q.Get("obfs-password")
+		case "servo":
+			c.Obfs.Servo.Password = q.Get("obfs-password")
 		case "salamander":
 			c.Obfs.Salamander.Password = q.Get("obfs-password")
 		case "gecko":
