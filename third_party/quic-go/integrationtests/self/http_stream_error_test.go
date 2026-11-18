@@ -22,7 +22,9 @@ func TestHTTPStreamErrors(t *testing.T) {
 			serverStreams := make(chan *http3.Stream, 1)
 			mux := http.NewServeMux()
 			mux.HandleFunc("/cancel", func(w http.ResponseWriter, _ *http.Request) {
-				serverStreams <- w.(http3.HTTPStreamer).HTTPStream()
+				w.WriteHeader(http.StatusOK)
+				str, _ := w.(http3.HTTPStreamer).HTTPStream()
+				serverStreams <- str
 			})
 			port := startHTTPServer(t, mux)
 

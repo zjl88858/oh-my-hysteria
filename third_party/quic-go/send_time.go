@@ -57,3 +57,13 @@ func (c *sconn) WriteWithQUICSendTime(b []byte, gso uint16, ecn protocol.ECN, se
 	}
 	return c.Write(b, gso, ecn)
 }
+
+// Used by both the synchronous initial-MTU check and the regular send queue.
+func writePacketAt(conn sendConn, data []byte, gso uint16, ecn protocol.ECN, sent time.Time) error {
+	if timed, ok := conn.(interface {
+		WriteWithQUICSendTime([]byte, uint16, protocol.ECN, time.Time) error
+	}); ok && !sent.IsZero() {
+		return timed.WriteWithQUICSendTime(data, gso, ecn, sent)
+	}
+	return conn.Write(data, gso, ecn)
+}

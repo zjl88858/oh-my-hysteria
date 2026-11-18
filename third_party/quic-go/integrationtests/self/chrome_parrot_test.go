@@ -63,17 +63,19 @@ func chromeCompatibleTLSConfigs(t *testing.T) (server, client *tls.Config) {
 	pool.AddCert(ca)
 
 	const alpn = "h3" // required for an exact match
-	return &tls.Config{
-			Certificates: []tls.Certificate{{
-				Certificate: [][]byte{leafDER},
-				PrivateKey:  leafKey,
-			}},
-			NextProtos: []string{alpn},
-		}, &tls.Config{
-			RootCAs:    pool,
-			ServerName: "localhost",
-			NextProtos: []string{alpn},
-		}
+	serverConf := &tls.Config{
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{leafDER},
+			PrivateKey:  leafKey,
+		}},
+		NextProtos: []string{alpn},
+	}
+	clientConf := &tls.Config{
+		RootCAs:    pool,
+		ServerName: "localhost",
+		NextProtos: []string{alpn},
+	}
+	return serverConf, clientConf
 }
 
 // TestChromeParrotHandshake is the load-bearing check on Config.ChromeParrot: the

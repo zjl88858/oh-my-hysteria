@@ -23,6 +23,9 @@ func nopWriteCloser(w io.Writer) io.WriteCloser {
 
 func TestTraceMetadata(t *testing.T) {
 	t.Run("non-connection trace", func(t *testing.T) {
+		resetEventSchemas(t)
+		RegisterEventSchema("urn:ietf:params:qlog:events:foo")
+
 		synctest.Test(t, func(t *testing.T) {
 			buf := &bytes.Buffer{}
 			trace := NewFileSeq(nopWriteCloser(buf))
@@ -30,23 +33,22 @@ func TestTraceMetadata(t *testing.T) {
 			producer := trace.AddProducer()
 			producer.Close()
 
-			testTraceMetadata(t, buf, "transport", "", []string{})
+			testTraceMetadata(t, buf, "transport", "", []string{"urn:ietf:params:qlog:events:foo"})
 		})
 	})
 
 	t.Run("connection trace", func(t *testing.T) {
+		resetEventSchemas(t)
+		RegisterEventSchema("urn:ietf:params:qlog:events:foo")
+		RegisterEventSchema("urn:ietf:params:qlog:events:bar")
+
 		synctest.Test(t, func(t *testing.T) {
 			buf := &bytes.Buffer{}
 			trace := NewConnectionFileSeq(
 				nopWriteCloser(buf),
 				false,
 				protocol.ParseConnectionID([]byte{0xde, 0xad, 0xbe, 0xef}),
-				[]string{"urn:ietf:params:qlog:events:foo", "urn:ietf:params:qlog:events:bar"},
 			)
-
-			require.False(t, trace.SupportsSchemas("urn:ietf:params:qlog:events:baz"))
-			require.True(t, trace.SupportsSchemas("urn:ietf:params:qlog:events:foo"))
-			require.True(t, trace.SupportsSchemas("urn:ietf:params:qlog:events:bar"))
 
 			go trace.Run()
 			producer := trace.AddProducer()

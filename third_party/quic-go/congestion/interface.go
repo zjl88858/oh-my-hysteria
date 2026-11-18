@@ -15,12 +15,15 @@ type (
 // Expose some constants from protocol that congestion control algorithms may need.
 const (
 	InitialPacketSize          = protocol.InitialPacketSize
-	MinPacingDelay             = protocol.MinPacingDelay
 	MaxPacketBufferSize        = protocol.MaxPacketBufferSize
 	MinInitialPacketSize       = protocol.MinInitialPacketSize
 	MaxCongestionWindowPackets = protocol.MaxCongestionWindowPackets
 	PacketsPerConnectionID     = protocol.PacketsPerConnectionID
 )
+
+// MinPacingDelay is the minimum duration used for packet pacing. It matches the
+// value quic-go's own pacer uses, which upstream no longer exports.
+const MinPacingDelay = time.Millisecond
 
 type AckedPacketInfo struct {
 	PacketNumber PacketNumber

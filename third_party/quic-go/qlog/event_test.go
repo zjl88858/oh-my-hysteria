@@ -14,6 +14,7 @@ import (
 	"github.com/apernet/quic-go/internal/utils"
 	"github.com/apernet/quic-go/internal/wire"
 	"github.com/apernet/quic-go/qlogwriter"
+	"github.com/apernet/quic-go/qlogwriter/jsontext"
 
 	"github.com/stretchr/testify/require"
 )
@@ -27,7 +28,6 @@ func testEventEncoding(t *testing.T, ev qlogwriter.Event) (string, string) {
 			nopWriteCloser(&buf),
 			true,
 			protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
-			[]string{EventSchema},
 		)
 		go tr.Run()
 		producer := tr.AddProducer()
@@ -62,8 +62,28 @@ func decode(t *testing.T, data string) (string, string) {
 	return result.Name, string(result.Data)
 }
 
+func TestRawInfo(t *testing.T) {
+	tests := []struct {
+		name     string
+		raw      RawInfo
+		expected string
+	}{
+		{"zero lengths", RawInfo{Length: 0, PayloadLength: 0}, `{"length":0,"payload_length":0}`},
+		{"only zero length", RawInfo{Length: 0, PayloadLength: OmitLength}, `{"length":0}`},
+		{"only zero payload length", RawInfo{Length: OmitLength, PayloadLength: 0}, `{"payload_length":0}`},
+		{"omitted lengths", RawInfo{Length: OmitLength, PayloadLength: OmitLength}, `{}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			require.NoError(t, tt.raw.encode(jsontext.NewEncoder(&buf)))
+			require.JSONEq(t, tt.expected, buf.String())
+		})
+	}
+}
+
 func TestStartedConnection(t *testing.T) {
-	var localInfo, remoteInfo PathEndpointInfo
+	var localInfo, remoteInfo TupleEndpointInfo
 	localInfo.IPv4 = netip.AddrPortFrom(netip.AddrFrom4([4]byte{192, 168, 13, 37}), 42)
 	ip, err := netip.ParseAddr("2001:db8::1")
 	require.NoError(t, err)
@@ -76,8 +96,23 @@ func TestStartedConnection(t *testing.T) {
 
 	require.Equal(t, "transport:connection_started", name)
 	require.JSONEq(t, `{
-		"local": {"ip_v4": "192.168.13.37", "port_v4": 42},
-		"remote": {"ip_v6": "2001:db8::1", "port_v6": 24}
+		"local": {"address_v4": {"ip": "192.168.13.37", "port": 42}},
+		"remote": {"address_v6": {"ip": "2001:db8::1", "port": 24}}
+	}`, ev)
+}
+
+func TestTupleAssigned(t *testing.T) {
+	name, ev := testEventEncoding(t, &TupleAssigned{
+		TupleID: "1",
+		Local:   TupleEndpointInfo{IPv4: netip.MustParseAddrPort("192.168.13.37:42")},
+		Remote:  TupleEndpointInfo{IPv6: netip.MustParseAddrPort("[2001:db8::1]:24")},
+	})
+
+	require.Equal(t, "transport:tuple_assigned", name)
+	require.JSONEq(t, `{
+		"tuple_id": "1",
+		"tuple_local": {"address_v4": {"ip": "192.168.13.37", "port": 42}},
+		"tuple_remote": {"address_v6": {"ip": "2001:db8::1", "port": 24}}
 	}`, ev)
 }
 
@@ -236,13 +271,13 @@ func TestSentTransportParameters(t *testing.T) {
 		SentBy:                          protocol.PerspectiveServer,
 		OriginalDestinationConnectionID: protocol.ParseConnectionID([]byte{0xde, 0xad, 0xc0, 0xde}),
 		InitialSourceConnectionID:       protocol.ParseConnectionID([]byte{0xde, 0xad, 0xbe, 0xef}),
-		RetrySourceConnectionID:         &rcid,
+		RetrySourceConnectionID:         rcid,
 		StatelessResetToken:             &protocol.StatelessResetToken{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00},
 		DisableActiveMigration:          true,
-		MaxIdleTimeout:                  321 * time.Millisecond,
+		MaxIdleTimeout:                  321*time.Millisecond + 123*time.Microsecond,
 		MaxUDPPayloadSize:               1234,
 		AckDelayExponent:                12,
-		MaxAckDelay:                     123 * time.Millisecond,
+		MaxAckDelay:                     123*time.Millisecond + 123*time.Microsecond,
 		ActiveConnectionIDLimit:         7,
 		InitialMaxData:                  4000,
 		InitialMaxStreamDataBidiLocal:   1000,
@@ -289,8 +324,9 @@ func TestServerTransportParametersWithoutStatelessResetToken(t *testing.T) {
 	require.JSONEq(t, `{
 		"initiator": "local",
 		"original_destination_connection_id": "deadc0de",
-		"initial_source_connection_id": "(empty)",
+		"initial_source_connection_id": "",
 		"disable_active_migration": false,
+		"ack_delay_exponent": 0,
 		"active_connection_id_limit": 7,
 		"max_datagram_frame_size": 0
 	}`, ev)
@@ -306,10 +342,11 @@ func TestTransportParametersWithoutRetrySourceConnectionID(t *testing.T) {
 	require.Equal(t, "transport:parameters_set", name)
 	require.JSONEq(t, `{
 		"initiator": "local",
-		"original_destination_connection_id": "(empty)",
-		"initial_source_connection_id": "(empty)",
+		"original_destination_connection_id": "",
+		"initial_source_connection_id": "",
 		"stateless_reset_token": "112233445566778899aabbccddeeff00",
 		"disable_active_migration": false,
+		"ack_delay_exponent": 0,
 		"max_datagram_frame_size": 0
 	}`, ev)
 }
@@ -348,16 +385,17 @@ func testTransportParametersWithPreferredAddress(t *testing.T, hasIPv4, hasIPv6 
 	require.Equal(t, "transport:parameters_set", name)
 	var addresses string
 	if hasIPv4 {
-		addresses += `"ip_v4": "12.34.56.78", "port_v4": 123,`
+		addresses += `"address_v4": {"ip": "12.34.56.78", "port": 123},`
 	}
 	if hasIPv6 {
-		addresses += `"ip_v6": "102:304:506:708:90a:b0c:d0e:f10", "port_v6": 456,`
+		addresses += `"address_v6": {"ip": "102:304:506:708:90a:b0c:d0e:f10", "port": 456},`
 	}
 	require.JSONEq(t, fmt.Sprintf(`{
 		"initiator": "local",
-		"original_destination_connection_id": "(empty)",
-		"initial_source_connection_id": "(empty)",
+		"original_destination_connection_id": "",
+		"initial_source_connection_id": "",
 		"disable_active_migration": false,
+		"ack_delay_exponent": 0,
 		"max_datagram_frame_size": 0,
 		"preferred_address": {
 			%s
@@ -377,9 +415,10 @@ func TestTransportParametersWithDatagramExtension(t *testing.T) {
 	require.Equal(t, "transport:parameters_set", name)
 	require.JSONEq(t, `{
 		"initiator": "local",
-		"original_destination_connection_id": "(empty)",
-		"initial_source_connection_id": "(empty)",
+		"original_destination_connection_id": "",
+		"initial_source_connection_id": "",
 		"disable_active_migration": false,
+		"ack_delay_exponent": 0,
 		"max_datagram_frame_size": 1337
 	}`, ev)
 }
@@ -393,26 +432,23 @@ func TestReceivedTransportParameters(t *testing.T) {
 	require.Equal(t, "transport:parameters_set", name)
 	require.JSONEq(t, `{
 		"initiator": "remote",
-		"initial_source_connection_id": "(empty)",
+		"initial_source_connection_id": "",
 		"disable_active_migration": false,
+		"ack_delay_exponent": 0,
 		"max_datagram_frame_size": 0
 	}`, ev)
 }
 
 func TestRestoredTransportParameters(t *testing.T) {
-	name, ev := testEventEncoding(t, &ParametersSet{
-		Restore:                        true,
+	name, ev := testEventEncoding(t, &ParametersRestored{
 		InitialMaxStreamDataBidiLocal:  100,
 		InitialMaxStreamDataBidiRemote: 200,
 		InitialMaxStreamDataUni:        300,
 		InitialMaxData:                 400,
-		MaxIdleTimeout:                 123 * time.Millisecond,
 	})
 
 	require.Equal(t, "transport:parameters_restored", name)
 	require.JSONEq(t, `{
-		"disable_active_migration": false,
-		"max_idle_timeout": 123,
 		"initial_max_data": 400,
 		"initial_max_stream_data_bidi_local": 100,
 		"initial_max_stream_data_bidi_remote": 200,
@@ -444,9 +480,7 @@ func TestPacketSent(t *testing.T) {
 			"packet_type": "handshake",
 			"packet_number": 1337,
 			"version": "1",
-			"scil": 4,
 			"scid": "04030201",
-			"dcil": 8,
 			"dcid": "0102030405060708"
 		},
 		"raw": {"length": 987, "payload_length": 1337},
@@ -476,7 +510,7 @@ func testPacketSent1RTT(t *testing.T, datagramPayloadChecksum DatagramPayloadChe
 			KeyPhaseBit:      KeyPhaseZero,
 			DestConnectionID: protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
 		},
-		Raw: RawInfo{Length: 123},
+		Raw: RawInfo{Length: 123, PayloadLength: OmitLength},
 		Frames: []Frame{
 			{Frame: &AckFrame{AckRanges: []wire.AckRange{{Smallest: 1, Largest: 10}}}},
 			{Frame: &MaxDataFrame{MaximumData: 987}},
@@ -492,7 +526,7 @@ func testPacketSent1RTT(t *testing.T, datagramPayloadChecksum DatagramPayloadChe
 	}
 	require.JSONEq(t, fmt.Sprintf(`{
 		%s
-		"header": {"packet_type": "1RTT", "packet_number": 1337, "dcil": 4, "dcid": "01020304", "key_phase_bit": "0"},
+		"header": {"packet_type": "1RTT", "packet_number": 1337, "dcid": "01020304", "key_phase_bit": false},
 		"raw": {"length": 123},
 		"frames": [{"frame_type": "ack", "acked_ranges": [[1, 10]]}, {"frame_type": "max_data", "maximum": 987}]
 	}`, checksum), ev)
@@ -526,11 +560,9 @@ func TestPacketReceived(t *testing.T) {
 			"packet_type": "initial",
 			"packet_number": 1337,
 			"version": "1",
-			"scil": 4,
 			"scid": "04030201",
-			"dcil": 8,
 			"dcid": "0102030405060708",
-			"token": {"data": "deadbeef"}
+			"token": {"raw": {"data": "deadbeef"}}
 		},
 		"raw": {"length": 789, "payload_length": 1234},
 		"frames": [
@@ -579,9 +611,8 @@ func testPacketReceived1RTT(t *testing.T, datagramPayloadChecksum DatagramPayloa
 		"header": {
 			"packet_type": "1RTT",
 			"packet_number": 1337,
-			"dcil": 8,
 			"dcid": "0102030405060708",
-			"key_phase_bit": "0"
+			"key_phase_bit": false
 		},
 		"raw": {"length": 789, "payload_length": 1234},
 		"frames": [
@@ -601,7 +632,7 @@ func TestPacketReceivedRetry(t *testing.T) {
 			DestConnectionID: protocol.ParseConnectionID([]byte{1, 2, 3, 4, 5, 6, 7, 8}),
 			Token:            &Token{Raw: []byte{0xde, 0xad, 0xbe, 0xef}},
 		},
-		Raw: RawInfo{Length: 123},
+		Raw: RawInfo{Length: 123, PayloadLength: OmitLength},
 	})
 
 	require.Equal(t, "transport:packet_received", name)
@@ -609,11 +640,9 @@ func TestPacketReceivedRetry(t *testing.T) {
 		"header": {
 			"packet_type": "retry",
 			"version": "1",
-			"scil": 4,
 			"scid": "04030201",
-			"dcil": 8,
 			"dcid": "0102030405060708",
-			"token": {"data": "deadbeef"}
+			"token": {"raw": {"data": "deadbeef"}}
 		},
 		"raw": {"length": 123}
 	}`, ev)
@@ -632,9 +661,7 @@ func TestVersionNegotiationReceived(t *testing.T) {
 	require.JSONEq(t, `{
 		"header": {
 			"packet_type": "version_negotiation",
-			"scil": 4,
 			"scid": "04030201",
-			"dcil": 8,
 			"dcid": "0102030405060708"
 		},
 		"supported_versions": ["deadbeef", "decafbad"]
@@ -649,13 +676,13 @@ func TestPacketBuffered(t *testing.T) {
 			DestConnectionID: protocol.ParseConnectionID([]byte{1, 2, 3, 4, 5, 6, 7, 8}),
 			SrcConnectionID:  protocol.ParseConnectionID([]byte{4, 3, 2, 1}),
 		},
-		Raw:                     RawInfo{Length: 1337},
+		Raw:                     RawInfo{Length: 1337, PayloadLength: OmitLength},
 		DatagramPayloadChecksum: 42,
 	})
 
 	require.Equal(t, "transport:packet_buffered", name)
 	require.JSONEq(t, `{
-		"header": {"packet_type": "handshake", "scil": 4, "scid": "04030201", "dcil": 8, "dcid": "0102030405060708"},
+		"header": {"packet_type": "handshake", "scid": "04030201", "dcid": "0102030405060708"},
 		"raw": {"length": 1337},
 		"datagram_payload_checksum": 42,
 		"trigger": "keys_unavailable"
@@ -665,17 +692,75 @@ func TestPacketBuffered(t *testing.T) {
 func TestPacketDropped(t *testing.T) {
 	name, ev := testEventEncoding(t, &PacketDropped{
 		Header:                  PacketHeader{PacketType: PacketTypeRetry},
-		Raw:                     RawInfo{Length: 1337},
+		Raw:                     RawInfo{Length: 1337, PayloadLength: OmitLength},
 		DatagramPayloadChecksum: 42,
 		Trigger:                 PacketDropPayloadDecryptError,
 	})
 
 	require.Equal(t, "transport:packet_dropped", name)
 	require.JSONEq(t, `{
-		"header": {"packet_type": "retry", "scil": 0, "dcil": 0},
+		"header": {"packet_type": "retry"},
 		"raw": {"length": 1337},
 		"datagram_payload_checksum": 42,
-		"trigger": "payload_decrypt_error"
+		"trigger": "decryption_failure",
+		"details": {"reason": "payload_decrypt_error"}
+	}`, ev)
+
+	_, ev = testEventEncoding(t, &PacketDropped{
+		Header:  PacketHeader{PacketType: PacketTypeRetry},
+		Raw:     RawInfo{Length: 1337, PayloadLength: OmitLength},
+		Trigger: PacketDropDuplicate,
+	})
+	require.JSONEq(t, `{
+		"header": {"packet_type": "retry"},
+		"raw": {"length": 1337},
+		"trigger": "duplicate"
+	}`, ev)
+}
+
+func TestDatagramDropped(t *testing.T) {
+	name, ev := testEventEncoding(t, &DatagramDropped{
+		Direction: DirectionReceiving,
+		Raw:       RawInfo{Length: 1337, PayloadLength: OmitLength},
+		Trigger:   "buffer_full",
+	})
+
+	require.Equal(t, "quic:datagram_dropped", name)
+	require.JSONEq(t, `{
+		"direction": "receiving",
+		"raw": {"length": 1337},
+		"trigger": "buffer_full"
+	}`, ev)
+}
+
+func TestRecoveryParametersSet(t *testing.T) {
+	parameters := RecoveryParametersSet{
+		ReorderingThreshold:     3,
+		TimeThreshold:           1.125,
+		TimerGranularity:        time.Millisecond,
+		InitialCongestionWindow: 38400,
+		InitialRTT:              150 * time.Millisecond,
+	}
+	name, ev := testEventEncoding(t, &parameters)
+	require.Equal(t, "quic:recovery_parameters_set", name)
+	require.JSONEq(t, `{
+		"reordering_threshold": 3,
+		"time_threshold": 1.125,
+		"timer_granularity": 1,
+		"initial_congestion_window": 38400,
+		"initial_rtt": 150
+	}`, ev)
+
+	parameters.PacketThresholdDisabled = true
+	parameters.TimeThreshold = 1.25
+	parameters.InitialCongestionWindow = 0
+	parameters.InitialRTT = 0
+	name, ev = testEventEncoding(t, &parameters)
+	require.Equal(t, "quic:recovery_parameters_set", name)
+	require.JSONEq(t, `{
+		"reordering_threshold": "disabled",
+		"time_threshold": 1.25,
+		"timer_granularity": 1
 	}`, ev)
 }
 
@@ -706,6 +791,14 @@ func TestMetricsUpdated(t *testing.T) {
 	require.Equal(t, float64(4321), ev["congestion_window"])
 	require.Equal(t, float64(1234), ev["bytes_in_flight"])
 	require.Equal(t, float64(42), ev["packets_in_flight"])
+	_, data = testEventEncoding(t, MetricsUpdated{CongestionWindow: 4321, SmoothedRTT: time.Millisecond})
+	require.JSONEq(t, `{
+		"smoothed_rtt": 1,
+		"rtt_variance": 0,
+		"congestion_window": 4321,
+		"bytes_in_flight": 0,
+		"packets_in_flight": 0
+	}`, data)
 }
 
 func TestPacketLost(t *testing.T) {
@@ -716,9 +809,38 @@ func TestPacketLost(t *testing.T) {
 
 	require.Equal(t, "recovery:packet_lost", name)
 	require.JSONEq(t, `{
-		"header": {"packet_type": "handshake", "packet_number": 42, "scil": 0, "dcil": 0},
+		"header": {"packet_type": "handshake", "packet_number": 42},
 		"trigger": "reordering_threshold"
 	}`, ev)
+}
+
+func TestPacketEventsTuple(t *testing.T) {
+	for _, ev := range []qlogwriter.Event{
+		PacketSent{Tuple: "1"},
+		PacketReceived{Tuple: "1"},
+	} {
+		t.Run(ev.Name(), func(t *testing.T) {
+			_, data := testEventEncoding(t, ev)
+			var fields map[string]any
+			require.NoError(t, json.Unmarshal([]byte(data), &fields))
+			require.Equal(t, "1", fields["tuple"])
+		})
+	}
+}
+
+func TestMTUProbePacket(t *testing.T) {
+	header := PacketHeader{PacketType: PacketType1RTT, PacketNumber: 42}
+	for _, ev := range []qlogwriter.Event{
+		PacketSent{Header: header, IsMTUProbePacket: true},
+		PacketLost{Header: header, IsMTUProbePacket: true},
+	} {
+		t.Run(ev.Name(), func(t *testing.T) {
+			_, data := testEventEncoding(t, ev)
+			var fields map[string]any
+			require.NoError(t, json.Unmarshal([]byte(data), &fields))
+			require.Equal(t, true, fields["is_mtu_probe_packet"])
+		})
+	}
 }
 
 func TestSpuriousLoss(t *testing.T) {
@@ -748,9 +870,16 @@ func TestMTUUpdated(t *testing.T) {
 
 	require.Equal(t, "recovery:mtu_updated", name)
 	require.JSONEq(t, `{
-		"mtu": 1337,
+		"new": 1337,
 		"done": true
 	}`, ev)
+}
+
+func TestConnectionStateUpdated(t *testing.T) {
+	name, ev := testEventEncoding(t, &ConnectionStateUpdated{State: ConnectionStateHandshakeConfirmed})
+
+	require.Equal(t, "quic:connection_state_updated", name)
+	require.JSONEq(t, `{"new": "handshake_confirmed"}`, ev)
 }
 
 func TestCongestionStateUpdated(t *testing.T) {
@@ -839,14 +968,13 @@ func TestKeyDiscarded(t *testing.T) {
 	}`, ev)
 }
 
-func TestLossTimerUpdated(t *testing.T) {
+func TestTimerUpdated(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var buf bytes.Buffer
 		tr := qlogwriter.NewConnectionFileSeq(
 			nopWriteCloser(&buf),
 			true,
 			protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
-			[]string{EventSchema},
 		)
 		go tr.Run()
 		producer := tr.AddProducer()
@@ -854,8 +982,8 @@ func TestLossTimerUpdated(t *testing.T) {
 		synctest.Wait()
 		time.Sleep(42 * time.Second)
 
-		producer.RecordEvent(&LossTimerUpdated{
-			Type:      LossTimerUpdateTypeSet,
+		producer.RecordEvent(&TimerUpdated{
+			Type:      TimerEventTypeSet,
 			TimerType: TimerTypePTO,
 			EncLevel:  protocol.EncryptionHandshake,
 			Time:      time.Now().Add(1337 * time.Second),
@@ -873,9 +1001,9 @@ func TestLossTimerUpdated(t *testing.T) {
 	})
 }
 
-func TestLossTimerUpdatedExpired(t *testing.T) {
-	name, ev := testEventEncoding(t, &LossTimerUpdated{
-		Type:      LossTimerUpdateTypeExpired,
+func TestTimerUpdatedExpired(t *testing.T) {
+	name, ev := testEventEncoding(t, &TimerUpdated{
+		Type:      TimerEventTypeExpired,
 		TimerType: TimerTypeACK,
 		EncLevel:  protocol.Encryption1RTT,
 	})
@@ -888,8 +1016,8 @@ func TestLossTimerUpdatedExpired(t *testing.T) {
 	}`, ev)
 }
 
-func TestLossTimerUpdatedCanceled(t *testing.T) {
-	name, ev := testEventEncoding(t, &eventLossTimerCanceled{})
+func TestTimerUpdatedCanceled(t *testing.T) {
+	name, ev := testEventEncoding(t, &TimerUpdated{Type: TimerEventTypeCancelled})
 
 	require.Equal(t, "recovery:loss_timer_updated", name)
 	require.JSONEq(t, `{"event_type": "cancelled"}`, ev)
@@ -924,7 +1052,9 @@ func TestALPNInformation(t *testing.T) {
 	})
 
 	require.Equal(t, "transport:alpn_information", name)
-	require.JSONEq(t, `{"chosen_alpn": "h3"}`, ev)
+	require.JSONEq(t, `{"chosen_alpn": {"string_value": "h3"}}`, ev)
+	_, ev = testEventEncoding(t, ALPNInformation{ChosenALPN: "\xff"})
+	require.JSONEq(t, `{"chosen_alpn": {"byte_value": "ff"}}`, ev)
 }
 
 func TestDebugEvent(t *testing.T) {

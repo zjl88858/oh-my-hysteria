@@ -157,7 +157,11 @@ func TestHTTPDatagrams(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 
-		str := w.(http3.HTTPStreamer).HTTPStream()
+		str, err := w.(http3.HTTPStreamer).HTTPStream()
+		if err != nil {
+			errChan <- err
+			return
+		}
 		go str.Read([]byte{0}) // need to continue reading from stream to observe state transitions
 
 		for {
@@ -220,7 +224,11 @@ func TestHTTPDatagramClose(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 
-		str := w.(http3.HTTPStreamer).HTTPStream()
+		str, err := w.(http3.HTTPStreamer).HTTPStream()
+		if err != nil {
+			errChan <- err
+			return
+		}
 		go str.Read([]byte{0}) // need to continue reading from stream to observe state transitions
 
 		for {
@@ -256,7 +264,10 @@ func TestHTTPDatagramClose(t *testing.T) {
 	require.ErrorIs(t, resetErr, io.EOF)
 
 	// make sure we can't send anymore
-	require.Error(t, str.SendDatagram([]byte("foo")))
+	require.ErrorIs(t, context.Cause(str.Context()), quic.ErrStreamClosed)
+	_, err := str.Write([]byte("foo"))
+	require.ErrorIs(t, err, quic.ErrStreamClosed)
+	require.ErrorIs(t, str.SendDatagram([]byte("foo")), quic.ErrStreamClosed)
 }
 
 func TestHTTPDatagramStreamReset(t *testing.T) {
@@ -277,7 +288,11 @@ func TestHTTPDatagramStreamReset(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 
-		str := w.(http3.HTTPStreamer).HTTPStream()
+		str, err := w.(http3.HTTPStreamer).HTTPStream()
+		if err != nil {
+			errChan <- err
+			return
+		}
 		go str.Read([]byte{0}) // need to continue reading from stream to observe state transitions
 
 		for {

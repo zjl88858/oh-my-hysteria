@@ -115,6 +115,8 @@ func configWithNonZeroNonFunctionFields(t *testing.T, chromeParrot bool) *Config
 			f.Set(reflect.ValueOf(int64(11)))
 		case "MaxIncomingUniStreams":
 			f.Set(reflect.ValueOf(int64(12)))
+		case "RequireStreamCreditRelease":
+			f.Set(reflect.ValueOf(true))
 		case "StatelessResetKey":
 			f.Set(reflect.ValueOf(&StatelessResetKey{1, 2, 3, 4}))
 		case "KeepAlivePeriod":
@@ -199,6 +201,9 @@ func TestConfigDefaultValues(t *testing.T) {
 	require.EqualValues(t, protocol.DefaultMaxIncomingUniStreams, c.MaxIncomingUniStreams)
 	require.False(t, c.DisablePathMTUDiscovery)
 	require.Nil(t, c.GetConfigForClient)
+	// Keep zero to distinguish the default from an explicitly configured floor.
+	require.Zero(t, c.InitialPacketSize)
+	require.Equal(t, protocol.ByteCount(protocol.InitialPacketSize), c.initialPacketSize())
 }
 
 func TestConfigZeroLimits(t *testing.T) {

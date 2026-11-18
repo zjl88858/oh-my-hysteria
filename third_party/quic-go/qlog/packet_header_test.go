@@ -19,18 +19,23 @@ func checkHeader(t *testing.T, hdr *PacketHeader, expected string) {
 	require.JSONEq(t, expected, buf.String())
 }
 
+func TestHeaderUnknownPacketType(t *testing.T) {
+	checkHeader(t, &PacketHeader{}, `{"packet_type":"unknown"}`)
+	checkHeader(t, &PacketHeader{PacketType: PacketTypeUnknown}, `{"packet_type":"unknown"}`)
+}
+
 func TestHeaderInitial(t *testing.T) {
 	checkHeader(t,
 		&PacketHeader{
-			PacketType:   PacketTypeInitial,
-			PacketNumber: 42,
-			Version:      protocol.Version(0xdecafbad),
+			PacketType:      PacketTypeInitial,
+			PacketNumber:    42,
+			SrcConnectionID: protocol.ZeroLengthConnectionID,
+			Version:         protocol.Version(0xdecafbad),
 		},
 		`{
 			"packet_type": "initial",
 			"packet_number": 42,
-			"dcil": 0,
-			"scil": 0,
+			"scid": "",
 			"version": "decafbad"
 		}`,
 	)
@@ -49,12 +54,10 @@ func TestHeaderInitialWithToken(t *testing.T) {
 		`{
 			"packet_type": "initial",
 			"packet_number": 1337,
-			"dcil": 4,
 			"dcid": "55667788",
-			"scil": 4,
 			"scid": "11223344",
 			"version": "decafbad",
-			"token": {"data": "deadbeef"}
+			"token": {"raw": {"data": "deadbeef"}}
 		}`,
 	)
 }
@@ -66,8 +69,6 @@ func TestHeaderLongPacketNumbers(t *testing.T) {
 			`{
 				"packet_type": "handshake",
 				"packet_number": 0,
-				"dcil": 0,
-				"scil": 0,
 				"version": "1"
 			}`,
 		)
@@ -80,8 +81,6 @@ func TestHeaderLongPacketNumbers(t *testing.T) {
 			protocol.InvalidPacketNumber,
 			`{
 				"packet_type": "handshake",
-				"dcil": 0,
-				"scil": 0,
 				"version": "1"
 			}`,
 		)
@@ -110,11 +109,9 @@ func TestHeaderRetry(t *testing.T) {
 		},
 		`{
 			"packet_type": "retry",
-			"dcil": 5,
 			"dcid": "5566778899",
-			"scil": 4,
 			"scid": "11223344",
-			"token": {"data": "deadbeef"},
+			"token": {"raw": {"data": "deadbeef"}},
 			"version": "decafbad"
 		}`,
 	)
@@ -126,14 +123,13 @@ func TestHeader1RTT(t *testing.T) {
 			PacketType:       PacketType1RTT,
 			PacketNumber:     42,
 			DestConnectionID: protocol.ParseConnectionID([]byte{0x55, 0x66, 0x77, 0x88}),
-			KeyPhaseBit:      KeyPhaseZero,
+			KeyPhaseBit:      KeyPhaseOne,
 		},
 		`{
 			"packet_type": "1RTT",
 			"packet_number": 42,
-			"dcil": 4,
 			"dcid": "55667788",
-			"key_phase_bit": "0"
+			"key_phase_bit": true
 		}`,
 	)
 }

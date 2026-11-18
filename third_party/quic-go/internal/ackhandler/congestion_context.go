@@ -50,6 +50,25 @@ func (h *sentPacketHandler) flushHistoryRemovals() {
 	h.pendingHistoryRemovals = nil
 }
 
+// Publish the final flight counters before retiring the controller's samples.
+// A spurious-only ACK has no fresh RTT or delivered bytes, but still undoes loss.
+func (h *sentPacketHandler) finishAdvancedAck(cc congestion.SendAlgorithmWithDebugInfos, level protocol.EncryptionLevel, now monotime.Time, prior protocol.ByteCount, rttUpdated, ecn bool, spurious []protocol.PacketNumber) {
+	if a := advancedControl(cc); a != nil {
+		if len(h.ackedPacketsInfo) != 0 || len(h.lostPacketsInfo) != 0 || rttUpdated || ecn {
+			a.OnCongestionEventContext(public.CongestionEventContext{
+				Time: now, Space: packetSpace(level), PriorBytesInFlight: public.ByteCount(prior),
+				BytesInFlight: public.ByteCount(h.bytesInFlight), ApplicationBytesInFlight: public.ByteCount(h.applicationBytesInFlight),
+				Acked: h.ackedPacketsInfo, Lost: h.lostPacketsInfo, RTT: h.rttStats.LatestRTT(),
+				RTTUpdated: rttUpdated, ECNCongestion: ecn,
+			})
+		}
+		for _, pn := range spurious {
+			a.OnSpuriousPacket(public.PacketNumber(pn), now)
+		}
+	}
+	h.flushHistoryRemovals()
+}
+
 func (h *sentPacketHandler) CongestionSendQuantum() protocol.ByteCount {
 	if a := advancedControl(h.getCongestionControl()); a != nil {
 		if q, ok := a.(interface{ SendQuantum() public.ByteCount }); ok {

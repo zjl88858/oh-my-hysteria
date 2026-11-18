@@ -47,11 +47,13 @@ func (r *contextRecorder) OnCongestionEventContext(e public.CongestionEventConte
 	r.events = append(r.events, e)
 	r.order = append(r.order, "event")
 }
+
 func (r *contextRecorder) OnPacketRemoved(_ public.PacketSpace, pn public.PacketNumber, reason public.RemovalReason) {
 	r.removed = append(r.removed, pn)
 	r.reasons = append(r.reasons, reason)
 	r.order = append(r.order, "remove")
 }
+
 func (r *contextRecorder) OnSpuriousPacket(pn public.PacketNumber, _ monotime.Time) {
 	r.spurious = append(r.spurious, pn)
 }
@@ -66,7 +68,7 @@ func richHandler() (*sentPacketHandler, *contextRecorder) {
 }
 
 func richSend(h *sentPacketHandler, at monotime.Time, level protocol.EncryptionLevel, probe bool) protocol.PacketNumber {
-	pn := h.PopPacketNumber(level)
+	pn := h.PopPacketNumber(level.PacketNumberSpace())
 	h.SentPacket(at, pn, protocol.InvalidPacketNumber, nil, []Frame{{Frame: &wire.PingFrame{}}}, level, protocol.ECNNon, 1200, probe, false)
 	return pn
 }
@@ -143,7 +145,7 @@ func TestAdvancedContextPTOKeysRetryMigrationAndIdle(t *testing.T) {
 	require.Contains(t, r.reasons, public.RemovalKeys)
 	require.Zero(t, h.applicationBytesInFlight)
 	richSend(h, now, protocol.Encryption1RTT, false)
-	require.True(t, h.QueueProbePacket(protocol.Encryption1RTT))
+	require.True(t, h.QueueProbePacket(protocol.PacketNumberSpaceAppData))
 	require.Contains(t, r.reasons, public.RemovalPTO)
 	require.Empty(t, r.events) // PTO removal is not congestion loss
 	h.NotifyApplicationLimited(now)
@@ -160,4 +162,24 @@ func TestAdvancedContextPTOKeysRetryMigrationAndIdle(t *testing.T) {
 	require.Equal(t, 2, r.resets)
 	require.Same(t, r, advancedControl(h.getCongestionControl()))
 	require.Zero(t, h.applicationBytesInFlight)
+}
+
+func TestAdvancedMTUProbeLossRetiredAfterEvent(t *testing.T) {
+	h, r := richHandler()
+	now := monotime.Now()
+	pn := richSend(h, now, protocol.Encryption1RTT, true)
+	var last protocol.PacketNumber
+	for range 4 {
+		last = richSend(h, now, protocol.Encryption1RTT, false)
+	}
+	_, err := h.ReceivedAck(&wire.AckFrame{AckRanges: ackRanges(last)}, protocol.Encryption1RTT, now.Add(time.Second))
+	require.NoError(t, err)
+	require.Len(t, r.events, 1)
+	require.Equal(t, public.PacketNumber(pn), r.events[0].Lost[0].PacketNumber)
+	require.True(t, r.events[0].Lost[0].MTUProbe)
+	require.Equal(t, []string{"event", "remove"}, r.order)
+	require.Equal(t, []public.PacketNumber{public.PacketNumber(pn)}, r.removed)
+	_, err = h.ReceivedAck(&wire.AckFrame{AckRanges: ackRanges(pn)}, protocol.Encryption1RTT, now.Add(2*time.Second))
+	require.NoError(t, err)
+	require.Empty(t, r.spurious)
 }

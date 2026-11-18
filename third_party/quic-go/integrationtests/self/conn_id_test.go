@@ -11,6 +11,7 @@ import (
 
 	"github.com/apernet/quic-go"
 	"github.com/apernet/quic-go/internal/protocol"
+	"github.com/apernet/quic-go/qlog"
 	"github.com/apernet/quic-go/qlogwriter"
 
 	"github.com/stretchr/testify/assert"
@@ -33,6 +34,18 @@ func (c *connIDGenerator) GenerateConnectionID() (quic.ConnectionID, error) {
 
 func (c *connIDGenerator) ConnectionIDLen() int { return c.Length }
 
+// zeroValueConnIDGenerator returns the zero ConnectionID,
+// which is interpreted as a zero-length connection ID.
+type zeroValueConnIDGenerator struct{}
+
+var _ quic.ConnectionIDGenerator = &zeroValueConnIDGenerator{}
+
+func (*zeroValueConnIDGenerator) GenerateConnectionID() (quic.ConnectionID, error) {
+	return quic.ConnectionID{}, nil
+}
+
+func (*zeroValueConnIDGenerator) ConnectionIDLen() int { return 0 }
+
 func randomConnIDLen() int { return 2 + mrand.IntN(19) }
 
 func TestConnectionIDsZeroLength(t *testing.T) {
@@ -48,6 +61,10 @@ func TestConnectionIDsCustomGenerator(t *testing.T) {
 		&connIDGenerator{Length: randomConnIDLen()},
 		&connIDGenerator{Length: randomConnIDLen()},
 	)
+}
+
+func TestConnectionIDsCustomGeneratorZeroValue(t *testing.T) {
+	testTransferWithConnectionIDs(t, randomConnIDLen(), 0, nil, &zeroValueConnIDGenerator{})
 }
 
 // connIDLen is ignored when connIDGenerator is set
@@ -130,6 +147,9 @@ func testTransferWithConnectionIDs(
 	conn.CloseWithError(0, "")
 	serverConn.CloseWithError(0, "")
 
+	requireValidConnIDs(t, serverCounter)
+	requireValidConnIDs(t, clientCounter)
+
 	for _, p := range serverCounter.getRcvdShortHeaderPackets() {
 		expectedLen := serverConnIDLen
 		if serverConnIDGenerator != nil {
@@ -146,6 +166,27 @@ func testTransferWithConnectionIDs(
 		}
 		if !assert.Equal(t, expectedLen, p.hdr.DestConnectionID.Len(), "client conn length mismatch") {
 			break
+		}
+	}
+}
+
+// requireValidConnIDs checks that all sent and received packets were logged with their connection IDs.
+func requireValidConnIDs(t *testing.T, c *packetCounter) {
+	t.Helper()
+
+	events := c.recorder.Events(qlog.PacketSent{}, qlog.PacketReceived{})
+	require.NotEmpty(t, events)
+	for _, ev := range events {
+		var hdr qlog.PacketHeader
+		switch e := ev.(type) {
+		case qlog.PacketSent:
+			hdr = e.Header
+		case qlog.PacketReceived:
+			hdr = e.Header
+		}
+		require.True(t, hdr.DestConnectionID.Valid(), "missing destination connection ID: %#v", ev)
+		if hdr.PacketType != qlog.PacketType1RTT {
+			require.True(t, hdr.SrcConnectionID.Valid(), "missing source connection ID: %#v", ev)
 		}
 	}
 }

@@ -65,14 +65,24 @@ func TestConnReceiveSettings(t *testing.T) {
 				Frame: qlog.Frame{
 					Frame: qlog.SettingsFrame{
 						MaxFieldSectionSize: 1234,
-						Datagram:            new(true),
-						ExtendedConnect:     new(true),
+						Datagram:            1,
+						ExtendedConnect:     1,
 						Other:               map[uint64]uint64{1337: 42},
 					},
 				},
 			},
 		},
 		filterQlogEventsForFrame(eventRecorder.Events(qlog.FrameParsed{}), qlog.SettingsFrame{}),
+	)
+	require.Equal(t,
+		[]qlogwriter.Event{
+			qlog.StreamTypeSet{
+				Initiator:  qlog.InitiatorRemote,
+				StreamID:   controlStr.StreamID(),
+				StreamType: qlog.StreamTypeControl,
+			},
+		},
+		eventRecorder.Events(qlog.StreamTypeSet{}),
 	)
 }
 
@@ -480,4 +490,42 @@ func testConnDatagramFailures(t *testing.T, datagram []byte) {
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for close")
 	}
+}
+
+type closeTrackingRecorder struct {
+	events.Recorder
+	closed chan struct{}
+}
+
+var _ qlogwriter.Recorder = &closeTrackingRecorder{}
+
+func (r *closeTrackingRecorder) RecordEvent(ev qlogwriter.Event) {
+	select {
+	case <-r.closed:
+		panic("RecordEvent called after Close")
+	default:
+	}
+	r.Recorder.RecordEvent(ev)
+}
+
+func (r *closeTrackingRecorder) Close() error {
+	close(r.closed)
+	return nil
+}
+
+func TestConnQlogProducerAfterClose(t *testing.T) {
+	_, serverConn := newConnPair(t)
+	rec := &closeTrackingRecorder{closed: make(chan struct{})}
+	conn := newRawConn(serverConn, false, nil, nopControlStrHandler, rec, nil)
+
+	serverConn.CloseWithError(0, "")
+	select {
+	case <-rec.closed:
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+
+	// closeTrackingRecorder panics if closed twice
+	_, err := conn.openControlStream(&settingsFrame{})
+	require.Error(t, err)
 }

@@ -5,6 +5,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"strconv"
 	"testing"
 
 	"github.com/apernet/quic-go"
@@ -82,8 +84,10 @@ func newTestResponseWriter(t *testing.T) *testResponseWriter {
 	str.EXPECT().Write(gomock.Any()).DoAndReturn(buf.Write).AnyTimes()
 	str.EXPECT().SetReadDeadline(gomock.Any()).Return(nil).AnyTimes()
 	str.EXPECT().SetWriteDeadline(gomock.Any()).Return(nil).AnyTimes()
+	clientConn, _ := newConnPair(t)
+	conn := newRawConn(clientConn, false, nil, nopControlStrHandler, &eventRecorder, nil)
 	rw := newResponseWriter(
-		newStream(str, nil, nil, func(io.Reader, *headersFrame) error { return nil }, &eventRecorder),
+		newStream(str, conn, nil, func(io.Reader, *headersFrame) error { return nil }, &eventRecorder),
 		nil,
 		false,
 		slog.Default(),
@@ -141,10 +145,152 @@ func TestResponseWriterDataStatusWithoutBody(t *testing.T) {
 	n, err := rw.Write([]byte("foobar"))
 	require.Zero(t, n)
 	require.ErrorIs(t, err, http.ErrBodyNotAllowed)
+	require.NoError(t, rw.Finish())
 
 	fields := rw.DecodeHeaders(t, 0)
 	require.Equal(t, []string{"304"}, fields[":status"])
+	require.NotContains(t, fields, "content-length")
 	require.Empty(t, rw.DecodeBody(t))
+}
+
+func TestResponseWriterHTTPStream(t *testing.T) {
+	t.Run("with WriteHeader", func(t *testing.T) {
+		rw := newTestResponseWriter(t)
+		rw.Header().Set("Capsule-Protocol", "?1")
+		rw.WriteHeader(http.StatusOK)
+		str, err := rw.HTTPStream()
+		require.NoError(t, err)
+		require.PanicsWithValue(t, "http3: WriteHeader called after HTTPStream", func() { rw.WriteHeader(http.StatusOK) })
+		_, err = str.Write([]byte("foobar"))
+		require.NoError(t, err)
+		n, err := rw.Write([]byte("raboof"))
+		require.ErrorIs(t, err, http.ErrHijacked)
+		require.Zero(t, n)
+
+		fields := rw.DecodeHeaders(t, 0)
+		require.Equal(t, []string{"200"}, fields[":status"])
+		require.Equal(t, []string{"?1"}, fields["capsule-protocol"])
+		require.Equal(t, []byte("foobar"), rw.DecodeBody(t))
+	})
+
+	t.Run("without WriteHeader", func(t *testing.T) {
+		rw := newTestResponseWriter(t)
+		str, err := rw.HTTPStream()
+		require.NoError(t, err)
+		require.Zero(t, rw.buf.Len())
+		require.PanicsWithValue(t, "http3: WriteHeader called after HTTPStream", func() { rw.WriteHeader(http.StatusOK) })
+		_, err = str.Write([]byte("foobar"))
+		require.EqualError(t, err, "http3: invalid use of Stream.Write before sending the response header")
+		require.EqualError(t,
+			str.TryWriteAll([]byte("foobar")),
+			"http3: invalid use of Stream.TryWriteAll before sending the response header",
+		)
+		_, err = rw.Write([]byte("foobar"))
+		require.ErrorIs(t, err, http.ErrHijacked)
+		require.Zero(t, rw.buf.Len())
+	})
+
+	t.Run("after an informational response", func(t *testing.T) {
+		rw := newTestResponseWriter(t)
+		rw.WriteHeader(http.StatusEarlyHints)
+		l := rw.buf.Len()
+		require.NotZero(t, l)
+		str, err := rw.HTTPStream()
+		require.NoError(t, err)
+		_, err = str.Write([]byte("foobar"))
+		require.EqualError(t, err, "http3: invalid use of Stream.Write before sending the response header")
+		require.Equal(t, l, rw.buf.Len())
+	})
+
+	t.Run("after writing the response body", func(t *testing.T) {
+		rw := newTestResponseWriter(t)
+		rw.Write([]byte("foobar"))
+		// the DATA frame is queued
+		_, err := rw.HTTPStream()
+		require.EqualError(t, err, "http3: invalid use of HTTPStream after writing the response body")
+		// the DATA frame was sent
+		rw.Flush()
+		_, err = rw.HTTPStream()
+		require.EqualError(t, err, "http3: invalid use of HTTPStream after writing the response body")
+		require.False(t, rw.wasStreamHijacked())
+	})
+
+	t.Run("retry after a failed write", func(t *testing.T) {
+		mockCtrl := gomock.NewController(t)
+		qstr := NewMockDatagramStream(mockCtrl)
+		qstr.EXPECT().StreamID().Return(quic.StreamID(42)).AnyTimes()
+		gomock.InOrder(
+			qstr.EXPECT().Write(gomock.Any()).Return(0, os.ErrDeadlineExceeded),
+			qstr.EXPECT().Write(gomock.Any()).DoAndReturn(func(b []byte) (int, error) { return len(b), nil }),
+		)
+		rw := newResponseWriter(newStream(qstr, nil, nil, nil, nil), nil, false, nil)
+		rw.WriteHeader(http.StatusOK)
+
+		str, err := rw.HTTPStream()
+		require.ErrorIs(t, err, os.ErrDeadlineExceeded)
+		require.Nil(t, str)
+		require.False(t, rw.wasStreamHijacked())
+
+		str, err = rw.HTTPStream()
+		require.NoError(t, err)
+		require.NotNil(t, str)
+		require.True(t, rw.wasStreamHijacked())
+	})
+}
+
+func TestResponseWriterHeaderRetry(t *testing.T) {
+	var buf bytes.Buffer
+	mockCtrl := gomock.NewController(t)
+	qstr := NewMockDatagramStream(mockCtrl)
+	qstr.EXPECT().StreamID().Return(quic.StreamID(42)).AnyTimes()
+	gomock.InOrder(
+		// the write deadline expires after the first few bytes of the HEADERS frame
+		qstr.EXPECT().Write(gomock.Any()).DoAndReturn(func(b []byte) (int, error) {
+			buf.Write(b[:3])
+			return 3, os.ErrDeadlineExceeded
+		}),
+		qstr.EXPECT().Write(gomock.Any()).DoAndReturn(buf.Write).AnyTimes(),
+	)
+	rw := newResponseWriter(newStream(qstr, nil, nil, nil, nil), nil, false, nil)
+	rw.Header().Set("Foo", "bar")
+	rw.WriteHeader(http.StatusOK)
+
+	require.ErrorIs(t, rw.FlushError(), os.ErrDeadlineExceeded)
+	// retry, as an application would after extending the write deadline
+	require.NoError(t, rw.FlushError())
+	_, err := rw.Write([]byte("foobar"))
+	require.NoError(t, err)
+
+	fields := decodeHeader(t, &buf)
+	require.Equal(t, []string{"200"}, fields[":status"])
+	require.Equal(t, []string{"bar"}, fields["foo"])
+	require.Equal(t, getDataFrame([]byte("foobar")), buf.Bytes())
+}
+
+func TestResponseWriterDataRetry(t *testing.T) {
+	var buf bytes.Buffer
+	mockCtrl := gomock.NewController(t)
+	qstr := NewMockDatagramStream(mockCtrl)
+	qstr.EXPECT().StreamID().Return(quic.StreamID(42)).AnyTimes()
+	// the write deadline expires while writing the buffered response body
+	qstr.EXPECT().Write([]byte("foo")).DoAndReturn(func(b []byte) (int, error) {
+		buf.Write(b[:1])
+		return 1, os.ErrDeadlineExceeded
+	})
+	qstr.EXPECT().Write(gomock.Any()).DoAndReturn(buf.Write).AnyTimes()
+	rw := newResponseWriter(newStream(qstr, nil, nil, nil, nil), nil, false, nil)
+	_, err := rw.Write([]byte("foo")) // buffered
+	require.NoError(t, err)
+
+	data := bytes.Repeat([]byte("a"), maxSmallResponseSize)
+	_, err = rw.Write(data)
+	require.ErrorIs(t, err, os.ErrDeadlineExceeded)
+	// retry, as an application would after extending the write deadline
+	_, err = rw.Write(data)
+	require.NoError(t, err)
+
+	decodeHeader(t, &buf)
+	require.Equal(t, append(getDataFrame([]byte("foo")), getDataFrame(data)...), buf.Bytes())
 }
 
 func TestResponseWriterContentLength(t *testing.T) {
@@ -162,6 +308,26 @@ func TestResponseWriterContentLength(t *testing.T) {
 	require.Equal(t, []string{"200"}, fields[":status"])
 	require.Equal(t, []string{"6"}, fields["content-length"])
 	require.Equal(t, []byte("foobar"), rw.DecodeBody(t))
+}
+
+func TestResponseWriterContentLengthRetry(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	qstr := NewMockDatagramStream(mockCtrl)
+	qstr.EXPECT().StreamID().Return(quic.StreamID(42)).AnyTimes()
+	gomock.InOrder(
+		// the write deadline expires before the HEADERS frame is written
+		qstr.EXPECT().Write(gomock.Any()).Return(0, os.ErrDeadlineExceeded),
+		qstr.EXPECT().Write(gomock.Any()).DoAndReturn(io.Discard.Write).AnyTimes(),
+	)
+	rw := newResponseWriter(newStream(qstr, nil, nil, nil, nil), nil, false, nil)
+	rw.Header().Set("Content-Length", strconv.Itoa(maxSmallResponseSize))
+
+	data := make([]byte, maxSmallResponseSize)
+	_, err := rw.Write(data)
+	require.ErrorIs(t, err, os.ErrDeadlineExceeded)
+	// retry, as an application would after extending the write deadline
+	_, err = rw.Write(data)
+	require.NoError(t, err)
 }
 
 func TestResponseWriterContentTypeSniffing(t *testing.T) {

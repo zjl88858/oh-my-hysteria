@@ -22,6 +22,13 @@ func (c *Config) maxRetryTokenAge() time.Duration {
 	return c.handshakeTimeout()
 }
 
+func (c *Config) initialPacketSize() protocol.ByteCount {
+	if c.InitialPacketSize == 0 {
+		return protocol.InitialPacketSize
+	}
+	return protocol.ByteCount(c.InitialPacketSize)
+}
+
 func validateConfig(config *Config) error {
 	if config == nil {
 		return nil
@@ -56,6 +63,7 @@ func validateConfig(config *Config) error {
 
 // populateConfig populates fields in the quic.Config with their default values, if none are set
 // it may be called with nil
+// InitialPacketSize keeps zero to distinguish the default from an explicit packet-size floor.
 func populateConfig(config *Config) *Config {
 	if config == nil {
 		config = &Config{}
@@ -100,10 +108,9 @@ func populateConfig(config *Config) *Config {
 	} else if maxIncomingUniStreams < 0 {
 		maxIncomingUniStreams = 0
 	}
+	// InitialPacketSize stays zero unless set: zero selects the default with the
+	// EMSGSIZE fallback, an explicit value is a hard floor.
 	initialPacketSize := config.InitialPacketSize
-	if initialPacketSize == 0 {
-		initialPacketSize = protocol.InitialPacketSize
-	}
 	enableDatagrams := config.EnableDatagrams
 	omitMaxDatagramFrameSize := config.OmitMaxDatagramFrameSize
 	if config.ChromeParrot {
@@ -123,7 +130,6 @@ func populateConfig(config *Config) *Config {
 		maxStreamReceiveWindow = max(maxStreamReceiveWindow, initialStreamReceiveWindow)
 		maxConnectionReceiveWindow = max(maxConnectionReceiveWindow, initialConnectionReceiveWindow)
 	}
-
 	return &Config{
 		GetConfigForClient:               config.GetConfigForClient,
 		Versions:                         versions,
@@ -137,6 +143,7 @@ func populateConfig(config *Config) *Config {
 		AllowConnectionWindowIncrease:    config.AllowConnectionWindowIncrease,
 		MaxIncomingStreams:               maxIncomingStreams,
 		MaxIncomingUniStreams:            maxIncomingUniStreams,
+		RequireStreamCreditRelease:       config.RequireStreamCreditRelease,
 		TokenStore:                       config.TokenStore,
 		EnableDatagrams:                  enableDatagrams,
 		OmitMaxDatagramFrameSize:         omitMaxDatagramFrameSize,

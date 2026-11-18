@@ -36,15 +36,13 @@ NewReno，因此 HyStart++ 在本功能选中的控制器安装后开始工作�
 要验证双方均使用 CUBIC，可在两端设置上面的配置，省略客户端 `bandwidth`
 设置。服务端本地 `bandwidth.up` 并非独立的算法强制选择开关。
 
-当前 quic-go 的 `MigratedPath` 会将控制器重置为内置 Reno，公开的自定义
-控制器 API 没有路径迁移通知。本次不改动该上游行为：主动路径迁移后不保证
-继续使用所选自定义控制器；重新建立 Hysteria 连接会重新应用配置。这也是
-现有自定义 BBR / Brutal 安装方式的限制，不等同于普通的同一路径数据传输。
+路径迁移时，本地 fork 调用 `AdvancedControl.OnPathReset` 重置支持该接口的控制器；
+未实现它的控制器沿用上游 `MigratedPath` 的 Reno 重置行为。重连后会重新应用配置。
 
 ## 研究结论与实现选择
 
-当前依赖为 `github.com/apernet/quic-go`
-`v0.63.1-0.20261004180939-a10df75c260c`。
+以下是 CUBIC 移植时对 `a10df75c260c` 的研究记录。当前传输层的基线与本地改动见
+[QUIC fork 说明](../third_party/quic-go/OHMY-FORK.md)。
 
 - quic-go 的 `internal/congestion/cubic_sender.go` 确有 CUBIC / Reno 分支，
   但默认初始化和迁移路径固定选择 Reno。
@@ -55,7 +53,7 @@ NewReno，因此 HyStart++ 在本功能选中的控制器安装后开始工作�
 
 因此将 CUBIC 的窗口增长、TCP-friendly 区域、快速收敛、旧版 HyStart 和
 pacing 适配到 `core/internal/congestion/cubic/`，通过公开接口安装。不修改
-Go 模块缓存，也不需要维护整个 quic-go 的私有副本。
+Go 模块缓存。后来引入的高级拥塞事件由本地 quic-go fork 提供。
 
 本地 CUBIC 曲线使用实际 datagram size，支持 PMTU 增长；保留 beta=0.7、
 C=0.4、快速收敛及窗口上限，并在长时间空闲后避免整数溢出。Reno 的传统

@@ -28,7 +28,7 @@ func TestOuterRecoveryDisabledPreservesNegativeClock(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	cc := mocks.NewMockSendAlgorithmWithDebugInfos(ctrl)
 	at := monotime.Time(-1_000_000_000)
-	h := &sentPacketHandler{appDataPackets: newPacketNumberSpace(0, true), peerAddressValidated: true, congestion: cc, rttStats: utils.NewRTTStats(), logger: utils.DefaultLogger}
+	h := &sentPacketHandler{appDataPackets: newPacketNumberSpace(), hist: *newSentPacketHistory(), peerAddressValidated: true, congestion: cc, rttStats: utils.NewRTTStats(), logger: utils.DefaultLogger}
 	cc.EXPECT().CanSend(gomock.Any()).Return(true).AnyTimes()
 	cc.EXPECT().HasPacingBudget(at).Return(true).AnyTimes()
 	cc.EXPECT().TimeUntilSend(gomock.Any()).Return(at).AnyTimes()

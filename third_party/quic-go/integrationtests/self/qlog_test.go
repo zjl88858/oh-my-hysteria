@@ -1,14 +1,19 @@
 package self_test
 
 import (
+	"bytes"
 	"context"
+	"net/netip"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/apernet/quic-go"
+	"github.com/apernet/quic-go/qlog"
 	"github.com/apernet/quic-go/qlogwriter"
+	"github.com/apernet/quic-go/qlogwriter/jsontext"
+	"github.com/apernet/quic-go/testutils/events"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,8 +21,6 @@ import (
 
 type mockTrace struct {
 	openRecorders atomic.Int32
-
-	SchemasChecked []string
 }
 
 var _ qlogwriter.Trace = &mockTrace{}
@@ -29,11 +32,6 @@ func newMockTrace() *mockTrace {
 func (t *mockTrace) AddProducer() qlogwriter.Recorder {
 	t.openRecorders.Add(1)
 	return &mockRecorder{onClose: func() { t.openRecorders.Add(-1) }}
-}
-
-func (t *mockTrace) SupportsSchemas(schema string) bool {
-	t.SchemasChecked = append(t.SchemasChecked, schema)
-	return true
 }
 
 func (t *mockTrace) OpenRecorders() int {
@@ -96,8 +94,53 @@ func TestQlogHandshake(t *testing.T) {
 
 	assert.Zero(t, clientTrace.OpenRecorders(), "client recorders should be closed")
 	assert.Zero(t, serverTrace.OpenRecorders(), "server recorders should be closed")
-	assert.Empty(t, clientTrace.SchemasChecked)
-	assert.Empty(t, serverTrace.SchemasChecked)
+}
+
+func TestQlogIPRedaction(t *testing.T) {
+	var serverEvents, clientEvents events.Recorder
+	redact := func(addr netip.AddrPort, isLocal bool) (string, bool) {
+		if isLocal {
+			return "", true
+		}
+		return "***", true
+	}
+	server, err := quic.Listen(
+		newUDPConnLocalhost(t),
+		getTLSConfig(),
+		getQuicConfig(&quic.Config{Tracer: qlog.RedactIPs(newTracer(&serverEvents), redact)}),
+	)
+	require.NoError(t, err)
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	clientConn, err := quic.Dial(
+		ctx,
+		newUDPConnLocalhost(t),
+		server.Addr(),
+		getTLSClientConfig(),
+		getQuicConfig(&quic.Config{Tracer: qlog.RedactIPs(newTracer(&clientEvents), redact)}),
+	)
+	require.NoError(t, err)
+	defer clientConn.CloseWithError(0, "")
+	serverConn, err := server.Accept(ctx)
+	require.NoError(t, err)
+	defer serverConn.CloseWithError(0, "")
+
+	for _, recorder := range []*events.Recorder{&serverEvents, &clientEvents} {
+		connections := recorder.Events(qlog.StartedConnection{})
+		require.Len(t, connections, 1)
+		conn := connections[0].(qlog.StartedConnection)
+		require.Equal(t, new(""), conn.RedactedLocal)
+		require.Equal(t, new("***"), conn.RedactedRemote)
+		require.Equal(t, "127.0.0.1", conn.Local.IPv4.Addr().String())
+		require.Equal(t, "127.0.0.1", conn.Remote.IPv4.Addr().String())
+		var buf bytes.Buffer
+		require.NoError(t, conn.Encode(jsontext.NewEncoder(&buf), time.Time{}))
+		require.JSONEq(t, `{
+			"local": {"address_v4": ""},
+			"remote": {"address_v4": "***"}
+		}`, buf.String())
+	}
 }
 
 func TestQlogHandshakeFailed(t *testing.T) {

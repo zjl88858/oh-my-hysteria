@@ -85,7 +85,8 @@ func TestParserUnknownFrameType(t *testing.T) {
 
 	r := bytes.NewReader(data)
 	fp := frameParser{r: r}
-	f, err := fp.ParseNext(nil)
+	var eventRecorder events.Recorder
+	f, err := fp.ParseNext(&eventRecorder)
 	require.NoError(t, err)
 	require.IsType(t, &headersFrame{}, f)
 	hf = f.(*headersFrame)
@@ -94,6 +95,9 @@ func TestParserUnknownFrameType(t *testing.T) {
 	_, err = io.ReadFull(r, payload)
 	require.NoError(t, err)
 	require.Equal(t, []byte("foo"), payload)
+	logged := eventRecorder.Events(qlog.FrameParsed{})
+	require.Equal(t, qlog.RawInfo{Length: 11, PayloadLength: 6}, logged[0].(qlog.FrameParsed).Raw)
+	require.Equal(t, qlog.RawInfo{Length: 8, PayloadLength: 3}, logged[1].(qlog.FrameParsed).Raw)
 }
 
 func TestParserUnsupportedFrameTypes(t *testing.T) {
@@ -135,7 +139,7 @@ func TestParserUnsupportedFrameTypes(t *testing.T) {
 				[]qlogwriter.Event{
 					qlog.FrameParsed{
 						StreamID: 42,
-						Raw:      qlog.RawInfo{Length: headerLen, PayloadLength: 6},
+						Raw:      qlog.RawInfo{Length: headerLen + 6, PayloadLength: 6},
 						Frame:    qlog.Frame{Frame: tc.qf},
 					},
 					qlog.FrameParsed{
@@ -199,6 +203,7 @@ func appendSetting(b []byte, key, value uint64) []byte {
 }
 
 func TestParserSettingsFrame(t *testing.T) {
+	var eventRecorder events.Recorder
 	settings := appendSetting(nil, 13, 37)
 	settings = appendSetting(settings, 0xdead, 0xbeef)
 	data := quicvarint.Append(nil, 4) // type byte
@@ -209,13 +214,21 @@ func TestParserSettingsFrame(t *testing.T) {
 	testFrameParserEOF(t, data)
 
 	fp := frameParser{r: bytes.NewReader(data)}
-	frame, err := fp.ParseNext(nil)
+	frame, err := fp.ParseNext(&eventRecorder)
 	require.NoError(t, err)
 	require.IsType(t, &settingsFrame{}, frame)
 	sf := frame.(*settingsFrame)
 	require.Len(t, sf.Other, 2)
 	require.Equal(t, uint64(37), sf.Other[uint64(13)])
 	require.Equal(t, uint64(0xbeef), sf.Other[uint64(0xdead)])
+	logged := eventRecorder.Events(qlog.FrameParsed{})
+	require.Len(t, logged, 1)
+	require.Equal(t, qlog.SettingsFrame{
+		MaxFieldSectionSize: -1,
+		Datagram:            -1,
+		ExtendedConnect:     -1,
+		Other:               map[uint64]uint64{13: 37, 0xdead: 0xbeef},
+	}, logged[0].(qlog.FrameParsed).Frame.Frame)
 
 	// write and parse
 	fp = frameParser{r: bytes.NewReader(sf.Append(nil))}
@@ -305,31 +318,33 @@ func testParserSettingsFrameMaxFieldSectionSize(t *testing.T, present bool) {
 
 func TestParserSettingsFrameDatagram(t *testing.T) {
 	t.Run("enabled", func(t *testing.T) {
-		testParserSettingsFrameDatagram(t, true)
+		testParserSettingsFrameDatagram(t, 1)
 	})
 	t.Run("disabled", func(t *testing.T) {
-		testParserSettingsFrameDatagram(t, false)
+		testParserSettingsFrameDatagram(t, 0)
 	})
 }
 
-func testParserSettingsFrameDatagram(t *testing.T, enabled bool) {
-	var settings []byte
-	switch enabled {
-	case true:
-		settings = appendSetting(nil, settingDatagram, 1)
-	case false:
-		settings = appendSetting(nil, settingDatagram, 0)
-	}
+func testParserSettingsFrameDatagram(t *testing.T, val uint64) {
+	var eventRecorder events.Recorder
+	settings := appendSetting(nil, settingDatagram, val)
 	data := quicvarint.Append(nil, 4) // type byte
 	data = quicvarint.Append(data, uint64(len(settings)))
 	data = append(data, settings...)
 
 	fp := frameParser{r: bytes.NewReader(data)}
-	f, err := fp.ParseNext(nil)
+	f, err := fp.ParseNext(&eventRecorder)
 	require.NoError(t, err)
 	require.IsType(t, &settingsFrame{}, f)
 	sf := f.(*settingsFrame)
-	require.Equal(t, enabled, sf.Datagram)
+	require.Equal(t, val == 1, sf.Datagram)
+	logged := eventRecorder.Events(qlog.FrameParsed{})
+	require.Len(t, logged, 1)
+	require.Equal(t, qlog.SettingsFrame{
+		MaxFieldSectionSize: -1,
+		Datagram:            int64(val),
+		ExtendedConnect:     -1,
+	}, logged[0].(qlog.FrameParsed).Frame.Frame)
 
 	fp = frameParser{r: bytes.NewReader(sf.Append(nil))}
 	f2, err := fp.ParseNext(nil)
@@ -350,31 +365,33 @@ func TestParserSettingsFrameDatagramInvalidValue(t *testing.T) {
 
 func TestParserSettingsFrameExtendedConnect(t *testing.T) {
 	t.Run("enabled", func(t *testing.T) {
-		testParserSettingsFrameExtendedConnect(t, true)
+		testParserSettingsFrameExtendedConnect(t, 1)
 	})
 	t.Run("disabled", func(t *testing.T) {
-		testParserSettingsFrameExtendedConnect(t, false)
+		testParserSettingsFrameExtendedConnect(t, 0)
 	})
 }
 
-func testParserSettingsFrameExtendedConnect(t *testing.T, enabled bool) {
-	var settings []byte
-	switch enabled {
-	case true:
-		settings = appendSetting(nil, settingExtendedConnect, 1)
-	case false:
-		settings = appendSetting(nil, settingExtendedConnect, 0)
-	}
+func testParserSettingsFrameExtendedConnect(t *testing.T, val uint64) {
+	var eventRecorder events.Recorder
+	settings := appendSetting(nil, settingExtendedConnect, val)
 	data := quicvarint.Append(nil, 4) // type byte
 	data = quicvarint.Append(data, uint64(len(settings)))
 	data = append(data, settings...)
 
 	fp := frameParser{r: bytes.NewReader(data)}
-	f, err := fp.ParseNext(nil)
+	f, err := fp.ParseNext(&eventRecorder)
 	require.NoError(t, err)
 	require.IsType(t, &settingsFrame{}, f)
 	sf := f.(*settingsFrame)
-	require.Equal(t, enabled, sf.ExtendedConnect)
+	require.Equal(t, val == 1, sf.ExtendedConnect)
+	logged := eventRecorder.Events(qlog.FrameParsed{})
+	require.Len(t, logged, 1)
+	require.Equal(t, qlog.SettingsFrame{
+		MaxFieldSectionSize: -1,
+		Datagram:            -1,
+		ExtendedConnect:     int64(val),
+	}, logged[0].(qlog.FrameParsed).Frame.Frame)
 
 	fp = frameParser{r: bytes.NewReader(sf.Append(nil))}
 	f2, err := fp.ParseNext(nil)

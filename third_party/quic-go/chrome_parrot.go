@@ -53,7 +53,7 @@ func chromeParrotTransportParameters(params *wire.TransportParameters) {
 type ZeroLengthConnectionIDGenerator struct{}
 
 func (ZeroLengthConnectionIDGenerator) GenerateConnectionID() (ConnectionID, error) {
-	return ConnectionID{}, nil
+	return protocol.ZeroLengthConnectionID, nil
 }
 
 func (ZeroLengthConnectionIDGenerator) ConnectionIDLen() int { return 0 }

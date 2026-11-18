@@ -192,6 +192,22 @@ func TestServerRequestHandling(t *testing.T) {
 		require.Equal(t, hfs[":status"], []string{"418"})
 		require.Equal(t, []byte("foobar"), body)
 	})
+
+	t.Run("POST request with fewer body bytes than announced", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "https://www.example.com", bytes.NewBuffer([]byte("foo")))
+		req.ContentLength = 6
+		hfs, body := testServerRequestHandling(t,
+			func(w http.ResponseWriter, r *http.Request) {
+				_, err := io.ReadAll(r.Body)
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, err)
+			},
+			req,
+			nil,
+		)
+		require.Equal(t, hfs[":status"], []string{"400"})
+		require.Equal(t, []byte(io.ErrUnexpectedEOF.Error()), body)
+	})
 }
 
 func testServerRequestHandling(t *testing.T,
@@ -389,6 +405,39 @@ func testServerPanickingHandler(t *testing.T, handler http.HandlerFunc) (logOutp
 	return logBuf.String()
 }
 
+func TestServerHandlerReturnsMidFrame(t *testing.T) {
+	clientConn, serverConn := newConnPair(t)
+	str, err := clientConn.OpenStream()
+	require.NoError(t, err)
+	_, err = str.Write(encodeRequest(t, httptest.NewRequest(http.MethodGet, "https://www.example.com", nil)))
+	require.NoError(t, err)
+	require.NoError(t, str.Close())
+
+	done := make(chan struct{})
+	s := &Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer close(done)
+			rc := http.NewResponseController(w)
+			// the client doesn't read the response, so the write blocks once the flow control window is used up
+			rc.SetWriteDeadline(time.Now().Add(scaleDuration(10 * time.Millisecond)))
+			w.Write(make([]byte, 10<<20))
+			// flushing succeeds, but the DATA frame is still unfinished
+			rc.SetWriteDeadline(time.Time{})
+		}),
+	}
+	go s.ServeQUICConn(serverConn)
+	defer s.Close()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+	str.SetReadDeadline(time.Now().Add(time.Second))
+	_, err = io.ReadAll(str)
+	require.ErrorIs(t, err, &quic.StreamError{StreamID: str.StreamID(), ErrorCode: quic.StreamErrorCode(ErrCodeRequestCanceled), Remote: true})
+}
+
 func TestServerRequestHeaderTooLarge(t *testing.T) {
 	t.Run("default value", func(t *testing.T) {
 		var eventRecorder events.Recorder
@@ -490,6 +539,49 @@ func TestServerRequestContext(t *testing.T) {
 	close(block)
 }
 
+func TestServerQlogClosedAfterHandlerReturns(t *testing.T) {
+	clientConn, serverConn := newConnPair(t)
+	str, err := clientConn.OpenStream()
+	require.NoError(t, err)
+	_, err = str.Write(encodeRequest(t, httptest.NewRequest(http.MethodGet, "https://www.example.com", nil)))
+	require.NoError(t, err)
+
+	handlerStarted := make(chan struct{})
+	block := make(chan struct{})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(handlerStarted)
+		<-block
+	})
+	rec := &closeTrackingRecorder{closed: make(chan struct{})}
+	conn := newRawServerConn(serverConn, false, 0, rec, nil, context.Background(), handler, 0)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	serverStr, err := serverConn.AcceptStream(ctx)
+	require.NoError(t, err)
+	go conn.HandleRequestStream(serverStr)
+
+	select {
+	case <-handlerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+
+	serverConn.CloseWithError(0, "")
+	select {
+	case <-rec.closed:
+		t.Fatal("qlogger closed while the handler was running")
+	case <-time.After(scaleDuration(10 * time.Millisecond)):
+	}
+
+	close(block)
+	select {
+	case <-rec.closed:
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+}
+
 func TestServerHTTPStreamHijacking(t *testing.T) {
 	clientConn, serverConn := newConnPair(t)
 	str, err := clientConn.OpenStream()
@@ -500,7 +592,11 @@ func TestServerHTTPStreamHijacking(t *testing.T) {
 
 	s := &Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			str := w.(HTTPStreamer).HTTPStream()
+			w.WriteHeader(http.StatusOK)
+			str, err := w.(HTTPStreamer).HTTPStream()
+			if err != nil {
+				return
+			}
 			str.Write([]byte("foobar"))
 			str.Close()
 		}),
@@ -522,6 +618,34 @@ func TestServerHTTPStreamHijacking(t *testing.T) {
 	data, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.Equal(t, []byte("foobar"), data)
+}
+
+func TestServerHTTPStreamHijackingWithoutResponse(t *testing.T) {
+	clientConn, serverConn := newConnPair(t)
+	str, err := clientConn.OpenStream()
+	require.NoError(t, err)
+	_, err = str.Write(encodeRequest(t, httptest.NewRequest(http.MethodGet, "https://www.example.com", nil)))
+	require.NoError(t, err)
+	require.NoError(t, str.Close())
+
+	errChan := make(chan error, 1)
+	s := &Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			str, _ := w.(HTTPStreamer).HTTPStream()
+			_, err := str.Write([]byte("foobar"))
+			errChan <- err
+			str.CancelWrite(quic.StreamErrorCode(ErrCodeRequestRejected))
+		}),
+	}
+	go s.ServeQUICConn(serverConn)
+
+	select {
+	case err := <-errChan:
+		require.EqualError(t, err, "http3: invalid use of Stream.Write before sending the response header")
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+	expectStreamReadReset(t, str, quic.StreamErrorCode(ErrCodeRequestRejected))
 }
 
 func getAltSvc(s *Server) (string, bool) {

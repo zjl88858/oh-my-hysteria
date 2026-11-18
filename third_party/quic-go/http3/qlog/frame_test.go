@@ -14,7 +14,7 @@ func check(t *testing.T, f any, expected string) {
 
 	var buf bytes.Buffer
 	enc := jsontext.NewEncoder(&buf)
-	require.NoError(t, (Frame{Frame: f}).encode(enc))
+	require.NoError(t, (Frame{Frame: f}).encode(enc, RawInfo{Length: OmitLength, PayloadLength: OmitLength}))
 	require.JSONEq(t, expected, buf.String())
 }
 
@@ -25,16 +25,25 @@ func TestDataFrame(t *testing.T) {
 }
 
 func TestHeadersFrame(t *testing.T) {
+	check(t, HeadersFrame{}, `{"frame_type": "headers", "headers": []}`)
 	check(t, HeadersFrame{
 		HeaderFields: []HeaderField{
 			{Name: ":status", Value: "200"},
 			{Name: "content-type", Value: "application/json"},
+			{Name: "x-opaque", Value: "\xff"},
+			{Name: "bad name", Value: "ok", InvalidName: true},
+			{Name: "x-example", Value: "a\r\nb", InvalidValue: true},
+			{Name: "\xff", Value: "ok"},
 		},
 	}, `{
 		"frame_type": "headers",
-		"header_fields": [
+		"headers": [
 			{"name": ":status", "value": "200"},
-			{"name": "content-type", "value": "application/json"}
+			{"name": "content-type", "value": "application/json"},
+			{"name": "x-opaque", "value_bytes": "ff"},
+			{"name_bytes": "626164206e616d65", "value": "ok"},
+			{"name": "x-example", "value_bytes": "610d0a62"},
+			{"name_bytes": "ff", "value": "ok"}
 		]
 	}`)
 }
@@ -53,36 +62,38 @@ func TestSettingsFrame(t *testing.T) {
 		expected string
 	}{
 		{
-			name: "datagram: true",
+			name: "datagram: 1",
 			frame: SettingsFrame{
 				MaxFieldSectionSize: -1,
-				Datagram:            new(true),
+				Datagram:            1,
+				ExtendedConnect:     -1,
 			},
 			expected: `{
 				"frame_type": "settings",
 				"settings": [{
 					"name": "settings_h3_datagram",
-					"value": true
+					"value": 1
 				}]
 			}`,
 		},
 		{
-			name: "extended_connect: false",
+			name: "extended_connect: 0",
 			frame: SettingsFrame{
 				MaxFieldSectionSize: -1,
-				ExtendedConnect:     new(false),
+				Datagram:            -1,
+				ExtendedConnect:     0,
 			},
 			expected: `{
 				"frame_type": "settings",
 				"settings": [{
 					"name": "settings_enable_connect_protocol",
-					"value": false
+					"value": 0
 				}]
 			}`,
 		},
 		{
 			name:  "max_field_section_size",
-			frame: SettingsFrame{MaxFieldSectionSize: 1337},
+			frame: SettingsFrame{MaxFieldSectionSize: 1337, Datagram: -1, ExtendedConnect: -1},
 			expected: `{
 				"frame_type": "settings",
 				"settings": [{
@@ -92,17 +103,17 @@ func TestSettingsFrame(t *testing.T) {
 			}`,
 		},
 		{
-			name: "datagram: false, extended_connect: false",
+			name: "datagram: 0, extended_connect: 0",
 			frame: SettingsFrame{
 				MaxFieldSectionSize: -1,
-				Datagram:            new(false),
-				ExtendedConnect:     new(false),
+				Datagram:            0,
+				ExtendedConnect:     0,
 			},
 			expected: `{
 				"frame_type": "settings",
 				"settings": [
-					{"name": "settings_h3_datagram", "value": false},
-					{"name": "settings_enable_connect_protocol", "value": false}
+					{"name": "settings_h3_datagram", "value": 0},
+					{"name": "settings_enable_connect_protocol", "value": 0}
 				]
 			}`,
 		},
@@ -113,6 +124,8 @@ func TestSettingsFrame(t *testing.T) {
 			// and would require us to deal with non-deterministic map iteration order.
 			frame: SettingsFrame{
 				MaxFieldSectionSize: -1,
+				Datagram:            -1,
+				ExtendedConnect:     -1,
 				Other:               map[uint64]uint64{0xdead: 0xbeef},
 			},
 			expected: `{

@@ -9,12 +9,38 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/apernet/quic-go/http3/qlog"
+	"github.com/apernet/quic-go/testutils/events"
 	ossfuzzseeds "github.com/quic-go/go-ossfuzz-seeds"
 	"github.com/quic-go/qpack"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 	"golang.org/x/net/http/httpguts"
 )
+
+func TestReadHeaderBlock(t *testing.T) {
+	for _, size := range []int{1024, 16 << 10} {
+		data := bytes.Repeat([]byte("a"), size+1)
+		r := bytes.NewReader(data)
+		b, err := readHeaderBlock(r, uint64(size))
+		require.NoError(t, err)
+		require.Equal(t, data[:size], b)
+		require.Equal(t, 1, r.Len())
+
+		r.Reset(data[:size-1])
+		_, err = readHeaderBlock(r, uint64(size))
+		require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	}
+
+	r := NewMockDatagramStream(gomock.NewController(t))
+	r.EXPECT().Read(gomock.Any()).DoAndReturn(func(b []byte) (int, error) {
+		require.Equal(t, 8<<10, cap(b))
+		return 0, io.EOF
+	})
+	_, err := readHeaderBlock(r, 1<<20)
+	require.ErrorIs(t, err, io.EOF)
+}
 
 func decodeFromSlice(headers []qpack.HeaderField) qpack.DecodeFunc {
 	var i int
@@ -25,6 +51,23 @@ func decodeFromSlice(headers []qpack.HeaderField) qpack.DecodeFunc {
 		h := headers[i]
 		i++
 		return h, nil
+	}
+}
+
+func TestHeaderCharacterValidationQlog(t *testing.T) {
+	for _, field := range []qlog.HeaderField{
+		{Name: "bad name", Value: "ok", InvalidName: true},
+		{Name: "x-example", Value: "a\r\nb", InvalidValue: true},
+		{Name: "bad name", Value: "a\r\nb", InvalidName: true, InvalidValue: true},
+	} {
+		headers := []qpack.HeaderField{{Name: ":status", Value: "200"}, {Name: field.Name, Value: field.Value}}
+		var fields []qpack.HeaderField
+		_, err := parseHeaders(decodeFromSlice(headers), false, math.MaxInt, &fields)
+		require.Error(t, err)
+		var recorder events.Recorder
+		qlogParsedHeadersFrame(&recorder, 0, &headersFrame{}, fields, err)
+		frame := recorder.Events()[0].(qlog.FrameParsed).Frame.Frame.(qlog.HeadersFrame)
+		require.Equal(t, []qlog.HeaderField{{Name: ":status", Value: "200"}, field}, frame.HeaderFields)
 	}
 }
 

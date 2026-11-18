@@ -1,217 +1,104 @@
 # oh-my-hysteria
 
-基于 [Hysteria 2](https://github.com/HyNetworks/hysteria) 的增强版代理工具。**v1.2.0**
-提供更多拥塞控制选择和可选 UDP 混淆，保留 Hysteria2 的常用配置与分享链接。
+oh-my-hysteria（OMHY）是 [Hysteria 2](https://hysteria.network/zh/) 的增强版。它保留了原有的代理方式和分享链接，主要扩展了两件事：**混淆**决定数据以什么样的包发出去，**拥塞控制**决定网络还能承受多快的发送速度。两者可以分别选择；默认使用 BBR，不启用额外混淆。
 
-本版新增 [Servo 跨数据报装箱](docs/servo.md)、[Tasman 纠删载波](docs/tasman.md) 与
-[Mariner 非线性关系织网](docs/mariner.md)。当前处于[发布准备](docs/release-v1.2.0.md)。
+当前源码版本 **v1.2.1**，已同步 Hysteria v2.14.0 的表达式访问规则（ACL）和 UDP 转发优化。QUIC 更新合入了[本地 quic-go 分支](third_party/quic-go/OHMY-FORK.md)，保留 OMHY 的拥塞控制和发送时序支持。
 
-[下载 Releases](https://github.com/zjl88858/oh-my-hysteria/releases) ·
-[项目仓库](https://github.com/zjl88858/oh-my-hysteria) ·
-[更新日志](CHANGELOG.md)
-
-## 特性
-
-- **拥塞控制**：默认 BBR，支持 Reno、CUBIC，以及实验性 BBRv3、COPA、Geodesic。
-- **启动与预设**：CUBIC / Reno 可启用 HyStart++；BBR / BBRv3 提供保守、标准、激进三档。
-- **混淆**：Salamander、Gecko、Blink、Presto、Trident、Carakan，以及 Servo、Tasman、Mariner。
-- **代理方式**：SOCKS5、HTTP、TCP / UDP 转发、TUN 等 Hysteria2 功能继续可用。
-
-## 目录
-
-- [快速开始](#快速开始)
-- [拥塞控制](#拥塞控制)
-- [混淆配置](#混淆配置)
-- [分享链接](#分享链接)
-- [配置文件与日志](#配置文件与日志)
-- [源码构建与容器](#源码构建与容器)
-- [更多文档](#更多文档)
-- [许可与致谢](#许可与致谢)
-
-## 快速开始
-
-### 1. 下载程序
-
-从 Releases 下载对应平台的程序：
-
-| 平台 | 文件名 |
-| --- | --- |
-| Linux x86-64 | `oh-my-hysteria-linux-amd64` |
-| Linux ARM64 | `oh-my-hysteria-linux-arm64` |
-| Windows x86-64 | `oh-my-hysteria-windows-amd64.exe` |
-
-以下命令以 Linux x86-64 为例。Linux 下载后先执行：
-
-```sh
-chmod +x oh-my-hysteria-linux-amd64
-```
-
-### 2. 配置服务端
-
-准备域名和对应的 TLS 证书，放行服务端的 **UDP 443**。保存为 `server.yaml`，
-将证书路径和示例密码替换为自己的内容：
-
-```yaml
-listen: :443
-
-tls:
-  cert: /etc/oh-my-hysteria/server.crt
-  key: /etc/oh-my-hysteria/server.key
-
-auth:
-  type: password
-  password: "CHANGE-ME-AUTH-PASSWORD"
-```
-
-启动服务端（Linux 绑定 443 需要相应端口权限）：
-
-```sh
-./oh-my-hysteria-linux-amd64 server -c server.yaml
-```
-
-### 3. 配置客户端
-
-保存为 `client.yaml`。`auth` 与服务端的 `auth.password` 一致，域名替换为自己的：
-
-```yaml
-server: proxy.example.com:443
-auth: "CHANGE-ME-AUTH-PASSWORD"
-
-tls:
-  sni: proxy.example.com
-
-socks5:
-  listen: 127.0.0.1:1080
-
-http:
-  listen: 127.0.0.1:8080
-```
-
-```sh
-./oh-my-hysteria-linux-amd64 client -c client.yaml
-```
-
-Windows 使用对应的可执行文件：
-
-```powershell
-.\oh-my-hysteria-windows-amd64.exe client -c client.yaml
-```
-
-随后将应用的 SOCKS5 代理设为 `127.0.0.1:1080`，或 HTTP 代理设为 `127.0.0.1:8080`。
-以上配置使用默认 BBR，不启用额外混淆。下面的配置片段可合并到现有 YAML 中，同类示例选一种即可。
-
-## 拥塞控制
-
-客户端和服务端分别配置**自己的发送方向**，两端可以选择不同算法。
-
-| 配置项 | 默认值 | 可选值与用途 |
-| --- | --- | --- |
-| `congestion.type` | `bbr` | 选择下表中的算法 |
-| `congestion.bbrProfile` | `standard` | `conservative` / `standard` / `aggressive`；仅对 `bbr`、`bbr3` 生效 |
-| `congestion.slowStart` | `legacy` | `legacy` / `hystart++`；HyStart++ 仅支持 `cubic`、`reno`，其他算法保留默认值 |
-
-### 算法选择
-
-| `type` | 说明 | 状态 |
-| --- | --- | --- |
-| `bbr` | 原有 BBRv1 派生实现，按带宽与时延估计控制发送 | 默认 |
-| `reno` | 传统的基于丢包的拥塞控制 | 可选 |
-| `cubic` | CUBIC 拥塞控制，可搭配 HyStart++ | 新增 |
-| `bbr3` | 独立的 BBRv3 实现，支持三档预设 | **实验性** |
-| `copa` | 延迟驱动的拥塞控制 | **实验性** |
-| `geodesic` | 参考 KCC / UCP 的往返时延基线跟踪；动态路径估计仍在完善 | **实验性** |
-
-保留默认 BBR，也可以调整它的预设：
-
-```yaml
-congestion:
-  type: bbr
-  bbrProfile: standard
-```
-
-CUBIC + HyStart++，根据时延变化调整慢启动退出时机：
-
-```yaml
-congestion:
-  type: cubic
-  slowStart: hystart++
-```
-
-BBRv3（实验性）：
-
-```yaml
-congestion:
-  type: bbr3
-  bbrProfile: standard
-```
-
-`bbrProfile` 的三档含义：`conservative` 减少探测压力，`standard` 为默认平衡设置，
-`aggressive` 更积极地探测带宽。BBR 与 BBRv3 的同名预设使用各自的参数。
-选择 COPA 或 Geodesic 时，将 `type` 改为 `copa` 或 `geodesic` 即可，当前没有额外配置项。
-
-### 与带宽设置配合
-
-要使用上述自适应拥塞控制，**省略客户端的 `bandwidth.up/down`** 即可。
-服务端也可以设置：
-
-```yaml
-ignoreClientBandwidth: true
-```
-
-相关选项如下：
-
-| 配置项 | 默认值 | 作用 |
-| --- | --- | --- |
-| `bandwidth.up` / `bandwidth.down` | 未设置 | 指定本端上传 / 下载带宽，如 `20 mbps`；具体协商行为沿用 Hysteria2 |
-| `bandwidth.disableLossCompensation` | `false` | 关闭 Brutal 的丢包补偿，仅在使用 Brutal 时生效 |
-| `ignoreClientBandwidth` | `false` | **仅服务端**；忽略客户端带宽请求，使用配置的自适应拥塞控制 |
-
-明确带宽协商成功的发送方向仍优先使用 **Brutal**。`brutal` 不是 `congestion.type` 的可选值。
+[下载已发布版本](https://github.com/zjl88858/oh-my-hysteria/releases) · [混淆配置](#混淆配置) · [拥塞控制](#拥塞控制) · [更新日志](CHANGELOG.md)
 
 ## 混淆配置
 
-两端的混淆类型和混淆密码需要一致。**混淆密码与前面用于登录的 `auth` 是两项独立设置。**
+同一份数据，可以改变**包有多大、什么时候发**，也可以改变**哪些数据装进同一个包**，或者改变**包里的字节怎样排列**。下面这些模式分别从这三个位置入手。它们改变的是外层 UDP 包；连接本身仍由 QUIC/TLS 加密。
 
-部署要求、成本和验证范围统一见[混淆说明](docs/obfuscation.md)。新增整形模式为实验功能，按需启用。
+### 改变包的大小和发送节奏
 
-| `obfs.type` | 说明 |
-| --- | --- |
-| `plain` 或省略 `obfs` | 不加额外混淆，连接仍使用 QUIC / TLS |
-| `salamander` | Salamander 数据报混淆 |
-| `gecko` | Salamander 混淆，加上握手阶段的分片与填充 |
-| `blink` | 认证封装、动态填充和可选用户态分片 |
-| `presto` | 单密码派生包长、转移、前导、分片和突发语法 |
-| `trident` | 单密码编译 64 指令 ISA，将认证密文编码为字节码并自动分片 |
-| `carakan` | 密码编译逆向 tANS 字节谱，自定义目标熵，自动分片与纠删修复 |
-| `servo` | 密码派生容量，跨数据报装箱，每条数据报最多两个认证容器 |
-| `tasman` | 短块纠删、有限载波与约2×预算，tiny例外独立计数 |
-| `mariner` | 密码编译的非线性字节关系、交织与最多两片封装 |
+- **Salamander / Gecko** 是上游提供的两种方式。Salamander 把密码和每包新生成的随机值组合起来，用算出的掩码改写包内容。原来一个包仍发成一个包，大小固定增加 8 字节。Gecko 在此基础上把握手数据拆开并填充，因此主要改变刚建立连接时看到的包长和包数。
+- **[Blink](docs/blink.md)** 给每个包加上接收方可以验证的封装，再随机补入少量字节。这样即使原始数据一样长，发出去的包也可以不同长。你可以限定最多补多少、是否拆包，以及客户端在开头发几个不带业务数据的包；上限越小，对流量的影响越可控。
+- **[Presto](docs/presto.md)** 改的是一串包之间的关系。密码决定一套规则，例如大包之后更可能接什么长度的包、连续发多少包后稍停一下。每次连接都按这套规则重新抽样，再通过拆分和填充调整包长。因此，同一密码下的流量有相似的节奏，但不会重播同一串包。代价是额外流量，以及两批包之间的短暂等待。
 
-### Mariner
+### 重新组合数据，或为丢包留一份修复材料
 
-```yaml
-obfs:
-  type: mariner
-  mariner:
-    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
-```
+- **[Servo](docs/servo.md)** 改变原始数据报和外层包之间的边界。例如，一个外层包可以同时装下上一条数据的尾部和下一条的开头；接收端再把它们分别拼回去。这样，连续到来的小包可以分摊封装开销，不必靠填充凑长度。代价是发送端会短暂等待下一份数据；如果只有一个孤立小包，就没有其他数据能和它分摊。
+- **[Tasman](docs/tasman.md)** 把几毫秒内到来的数据凑成一组，切成等宽的片，按密码选定的节奏分批发送。它还可以用同组数据算出修复片：如果丢了一片数据，但其余数据和一片修复片都到了，接收端就能算回缺失的那一片，不必等 QUIC 重传。Tasman 按约两倍输入数据量安排发送，先给真实数据留足空间，有余量才加修复片或填充。这个比例不是每包的上限：对只有几个字节的消息，光是包头就可能比数据本身还长。
 
-只需同一随机密码，图、非线性双射表与密度自动编译。内层最大1200B，外层UDP payload
-最大1232B；没有cover、额外等待或FEC。格式、成本和验证结果见 [Mariner](docs/mariner.md)。
+### 改变一个包内部的字节
 
-### Tasman
+- **[Trident](docs/trident.md)** 用密码生成一套有 64 条“指令”的编码规则，再把加密后的数据写成一串指令和参数。接收端用同一套规则读回数据，并不执行这些指令。换一个密码，哪些字节代表指令、每条后面要读多长都会改变。指令和对齐所占的空间会让包变大，大包需要拆开发送。
+- **[Carakan](docs/carakan.md)** 改变的是**哪些字节常见、哪些少见**。它用密码生成一张可反查的编码表，把原本分布接近均匀的密文改写成另一种字节分布。`targetEntropy` 越低，输出越集中在少数字节上，表示同一份数据通常也就越长。例如，默认值 `4.0` 下，纯编码理想上就需要约两倍空间，还没算分片和修复片。它用更多流量换取指定的分布，不是压缩。
+- **[Mariner](docs/mariner.md)** 改变的是**不同位置的字节之间有什么关系**。例如，它从密文里选出几个字节，按密码指定的规则算出一个新字节，再把它穿插回包里。接收端知道该看哪些位置，可以核对关系、取回密文并验证这个包。这里多出的字节不能修复另一个丢掉的包。在 6532 字节混合输入的回环测试中，实际发出的 UDP 数据约为输入的 1.41～1.46 倍；测试尚未证实这种结构比 Presto 更难识别。
+
+### 如何配置
+
+不启用混淆时，省略 `obfs` 即可。要启用，在客户端和服务端配置的顶层各放**一段**下面的 YAML，两端选择同一种模式。把示例 `password` 换成同一个随机混淆密码，与登录密码 `auth` 分开。可用 `python -c "import secrets; print(secrets.token_urlsafe(32))"` 生成密码。共同部署要求详见[混淆选型指南](docs/obfuscation.md)。
+
+<details>
+<summary>Salamander · 只需密码</summary>
 
 ```yaml
 obfs:
-  type: tasman
-  tasman:
+  type: salamander
+  salamander:
     password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
 ```
 
-两端同密码；内层1200B、外层UDP payload≤1232B，跨报文装箱并按预算发送有限修复。
-配置、tiny例外、异步错误与保守QUIC预留的边界见 [Tasman](docs/tasman.md)。
+详见 [Hysteria 2 官方混淆配置](https://v2.hysteria.network/zh/docs/advanced/Full-Server-Config/#_3)。
 
-### Servo
+</details>
+
+<details>
+<summary>Gecko · 可调握手分片大小</summary>
+
+```yaml
+obfs:
+  type: gecko
+  gecko:
+    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
+    minPacketSize: 512
+    maxPacketSize: 1200
+```
+
+`minPacketSize` 和 `maxPacketSize` 指定握手分片的目标大小范围，单位是字节。上面是默认值；只填密码也能用。调小上限，一次握手可能拆成更多包。这两个值不限制握手之后的普通数据包。详见 [Hysteria 2 官方 Gecko 配置](https://v2.hysteria.network/zh/docs/advanced/Full-Server-Config/#_3)。
+
+</details>
+
+<details>
+<summary>Blink · 可调包长、填充和拆包</summary>
+
+```yaml
+obfs:
+  type: blink
+  blink:
+    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
+    maxPacketSize: 1232
+    fragmentation: true
+    paddingMax: 32
+    junkPackets: 2  # 客户端默认值；服务端请删除此行或改为 0
+```
+
+- **限制包长：** `maxPacketSize` 限制每个发出包的 UDP 载荷大小，默认 1400 字节。示例收紧到 1232 字节，所以两端都要开 `fragmentation`，让放不下的数据可以拆开发送。不拆包时上限至少要设为 1272。
+- **改变包长和开头的包数：** `paddingMax: 32` 表示每条原始数据最多额外填充 32 字节，并非每次填满；设为 `0` 可关闭填充。`junkPackets` 控制客户端开头发几个不带业务数据的包，默认 2 个，设为 `0` 可关闭。服务端省略它或填 `0`。
+- **限制接收端资源：** `maxSessions` 限制同时保留多少个会话，`maxReassemblyBytes` 限制为拼回分片能缓存多少字节，`verifyPacketsPerSecond` 限制每秒尝试验证多少个包。一般保留默认值即可。
+
+详见 [Blink 完整参数与取值范围](docs/blink.md#配置)。
+
+</details>
+
+<details>
+<summary>Presto · 只需密码</summary>
+
+```yaml
+obfs:
+  type: presto
+  presto:
+    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
+```
+
+包长和发送间隔由密码生成，无需另设。详见 [Presto 技术文档](docs/presto.md)。
+
+</details>
+
+<details>
+<summary>Servo · 只需密码</summary>
 
 ```yaml
 obfs:
@@ -220,13 +107,40 @@ obfs:
     password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
 ```
 
-两端使用相同混淆密码。Servo 不主动填充或发送 cover，使用有限异步队列聚合不同
-QUIC 数据报。内层最大 1200B，外层 UDP payload 最大 1232B；迟到/失败消息由 QUIC
-自行恢复。配置、异步错误和验证边界见 [Servo](docs/servo.md)。
+每包能装多少数据、等多久再发，都由密码决定。详见 [Servo 技术文档](docs/servo.md)。
 
-### Carakan
+</details>
 
-在两端配置相同密码和目标熵：
+<details>
+<summary>Tasman · 只需密码</summary>
+
+```yaml
+obfs:
+  type: tasman
+  tasman:
+    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
+```
+
+无需手动填修复片数；发送端按密码生成的规则和可用流量预算决定实际发多少。详见 [Tasman 技术文档](docs/tasman.md)。
+
+</details>
+
+<details>
+<summary>Trident · 只需密码</summary>
+
+```yaml
+obfs:
+  type: trident
+  trident:
+    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
+```
+
+两端用密码生成同一套编码规则，无需交换指令表。详见 [Trident 技术文档](docs/trident.md)。
+
+</details>
+
+<details>
+<summary>Carakan · 可调字节分布</summary>
 
 ```yaml
 obfs:
@@ -236,277 +150,71 @@ obfs:
     targetEntropy: 4.0
 ```
 
-| 配置项 | 默认 / 范围 |
-| --- | --- |
-| `obfs.carakan.password` | 必填，32..1024 字节，建议至少 32 个随机字节生成的密码 |
-| `obfs.carakan.targetEntropy` | 省略为 **4.00 bits/byte**；支持 **1.00..7.50**，步长 **0.01**；两端必须一致 |
-
-Carakan 将认证密文输入逆向 tANS 状态机，输出密码派生的低熵字节谱。目标熵用于
-控制整形分布，短包实测值会受有限状态和边界影响；它是可逆整形，不是压缩。
-H 越低通常开销越大：符号层理想膨胀约 `8/H`，还需计入每片 52 字节认证封装及修复冗余。
-
-握手和数据统一自动分片：内层最大 1200 字节，外层 UDP payload 最大 1232 字节。
-1200 字节报文分为 2..13 个数据片，加 1..4 个认证修复片；收到足够合法片即可恢复缺片。
-当前仅提供带纠删修复的线格式 v3，旧开发构建需双端同时更新。
-
-配置、开销表和验证结果见 [Carakan](docs/carakan.md)。
-
-### Trident
-
-在两端配置相同的随机密码：
-
-```yaml
-obfs:
-  type: trident
-  trident:
-    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
-```
-
-唯一配置项 `obfs.trident.password` 必填，长度 **32..1024 字节**，建议至少 32 个随机字节
-生成的密码。密码编译出 64 个互不重复的操作码及各自的操作数长度、对齐规则；
-Byte-Split Packing 将认证加密后的载荷编码为可解析的自定义字节码，不执行指令。
-
-内层 QUIC 最大 1200 字节，自动分成最多 4 个独立认证片；1200 字节报文（含握手）
-必分成 3–4 片。外层 UDP payload 不超过 1232 字节，无需另配 MTU。
-每片有 84 字节认证封装，另加字节码编码开销；分片增加流量及丢包敏感性。
-协议及开销见 [Trident](docs/trident.md)。
-
-### Presto
-
-在两端配置同一个随机密码：
-
-```yaml
-obfs:
-  type: presto
-  presto:
-    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
-```
-
-Presto 只有一个配置项：`obfs.presto.password`，必填，长度 **32..1024 字节**，
-建议使用至少 32 个随机字节生成的密码（可用 Base64 保存）。
-程序从密码自动生成双向流量语法，每个会话再随机采样：
-
-- 包长的概率分布与相邻包长的转移关系。
-- 初次发送的前导形态、分片倾向，以及小突发之间的短暂间隔。
-- 同密码保持相对稳定的统计特征，但具体包序列不会固定；不同服务器请使用不同随机密码。
-
-外层 UDP payload 最大 1232 字节，内层 QUIC 最大 1200 字节，自动分片与重组，
-无需另配 MTU。填充最多为原始数据报长度的 1/3，另有每片 84 字节固定开销；
-分片与发送间隔会增加流量和时延。协议及验证结果见 [Presto](docs/presto.md)。
-
-### Blink
-
-在客户端、服务端都加入以下配置即可启用默认 Blink：
-
-```yaml
-obfs:
-  type: blink
-  blink:
-    password: "CHANGE-ME-TO-A-LONG-RANDOM-SECRET"
-```
-
-全部 Blink 参数位于 `obfs.blink` 下，未填写的选项使用默认值：
-
-| 参数 | 默认值 | 范围 / 说明 |
-| --- | --- | --- |
-| `password` | 必填 | 16..1024 字节；建议使用至少 32 字节的随机密码 |
-| `maxPacketSize` | `1400` | 本端发送的 UDP payload 上限，512..1400 字节；不分片时至少为 1272 |
-| `paddingMax` | `32` | 每个内层数据报最多追加的填充字节，0..128；`0` 关闭填充 |
-| `junkPackets` | 客户端 `2`；服务端 `0` | 首次发送前的干扰包数量，0..4；服务端只能省略或设为 `0` |
-| `fragmentation` | `false` | 启用用户态分片与重组；开启时两端都设为 `true` |
-| `maxSessions` | `1024` | 本端接收会话数量上限，1..4096 |
-| `maxReassemblyBytes` | `1048576`（1 MiB） | 分片重组数据缓存的总字节预算，1200..8388608；另有全局条目数量限制 |
-| `verifyPacketsPerSecond` | `32768` | 每秒报文认证预算，64..262144；允许短时突发，来源分组速率为全局的 1/4 |
-
-除 `paddingMax`、`junkPackets` 外，数字参数设为 `0` 表示使用默认值。
-其他预算可由两端各自设置，不要求相同。
-
-需要较小的外层包时，可在两端使用以下配置：
-
-```yaml
-obfs:
-  type: blink
-  blink:
-    password: "CHANGE-ME-TO-A-LONG-RANDOM-SECRET"
-    maxPacketSize: 1232
-    fragmentation: true
-    paddingMax: 32
-```
-
-- `maxPacketSize` 指 UDP payload，不是 IP MTU；分片会增加包数和额外开销。
-- 可选填充还受内层长度 10% 和外层剩余空间限制，固定封装开销另计。
-- 每个 IPv4 地址 / IPv6 `/64` 最多保留 8 个接收会话；高速线路可按服务器能力调整验签预算。
-- Blink 自动将内层 QUIC 限制为 1200 字节并关闭其 PMTU 探测，无需另外配置；当前不支持端口跳跃。
-
-### Gecko
-
-两端使用相同密码：
-
-```yaml
-obfs:
-  type: gecko
-  gecko:
-    password: "CHANGE-ME-OBFS-PASSWORD"
-    minPacketSize: 512
-    maxPacketSize: 1200
-```
-
-| `obfs.gecko` 参数 | 默认值 | 说明 |
-| --- | --- | --- |
-| `password` | 必填 | 混淆密码，至少 4 字节 |
-| `minPacketSize` | `512` | 握手分片的最小目标长度，大于 0 且不超过 `maxPacketSize` |
-| `maxPacketSize` | `1200` | 握手分片的最大目标长度，不超过 2048 字节；不是所有数据报的硬上限 |
-
-### Salamander
-
-```yaml
-obfs:
-  type: salamander
-  salamander:
-    password: "CHANGE-ME-OBFS-PASSWORD"
-```
-
-`obfs.salamander.password` 必填，至少 4 字节，两端一致。
-
-## 分享链接
-
-支持 `hysteria2://` 和 `hy2://`。使用客户端配置生成链接或二维码：
-
-```sh
-./oh-my-hysteria-linux-amd64 share -c client.yaml
-./oh-my-hysteria-linux-amd64 share -c client.yaml --qr
-```
-
-Blink 链接使用以下查询参数：
-
-| 参数 | 对应配置 |
-| --- | --- |
-| `obfs=blink` | `obfs.type` |
-| `obfs-password` | `obfs.blink.password` |
-| `blink-max-packet-size` | `maxPacketSize` |
-| `blink-fragmentation=1` | `fragmentation: true` |
-| `blink-padding-max` | `paddingMax` |
-| `blink-junk-packets` | `junkPackets` |
-
-使用 Blink 的两端都需要支持 Blink。分享链接包含连接凭证；拥塞控制和本地资源配额仍由各端配置选择。
-
-Presto 分享链接使用 `obfs=presto` 和 `obfs-password`，没有其他形态参数。
-Trident 分享链接使用 `obfs=trident` 和 `obfs-password`，同样只有密码参数。
-Carakan 使用 `obfs=carakan`、`obfs-password` 和可选 `carakan-target-entropy`；省略熵参数时为 4.00。
-Servo、Tasman、Mariner 分别使用 `obfs=servo|tasman|mariner` 和 `obfs-password`。
-
-## 配置文件与日志
-
-使用 `-c` 指定配置最直接。未指定时，依次查找当前目录、`$HOME/.oh-my-hysteria/`、
-`/etc/oh-my-hysteria/` 中的 `config.yaml` / `config.yml`，也支持 JSON 配置。
-
-| 命令行选项 | 默认值 | 用途 |
-| --- | --- | --- |
-| `-c` / `--config` | 自动查找 | 配置文件路径 |
-| `-l` / `--log-level` | `info` | `debug` / `info` / `warn` / `error` |
-| `-f` / `--log-format` | `console` | `console` / `json` |
-
-| 环境变量 | 用途 |
-| --- | --- |
-| `OH_MY_HYSTERIA_LOG_LEVEL` | 日志级别 |
-| `OH_MY_HYSTERIA_LOG_FORMAT` | 日志格式 |
-| `OH_MY_HYSTERIA_ACME_DIR` | ACME 证书存储目录；默认 `acme`，配置中的 `acme.dir` 优先 |
-
-上述三个变量兼容对应的 `HYSTERIA_*` 旧名称，`OH_MY_HYSTERIA_*` 优先。
-更新程序请从本项目 Releases 下载；程序不会自动向上游检查更新。
-
-<details>
-<summary>实验性拥塞控制诊断开关</summary>
-
-设置为 `1` 时向 stderr 输出相应控制器的模型快照，默认关闭：
-
-| 环境变量 | 控制器 |
-| --- | --- |
-| `OH_MY_HYSTERIA_BBR3_DEBUG` | BBRv3 |
-| `OH_MY_HYSTERIA_COPA_DEBUG` | COPA |
-| `OH_MY_HYSTERIA_GEODESIC_DEBUG` | Geodesic |
+`targetEntropy` 控制输出集中在少数字节上的程度：越低越集中，通常也越费流量。可选 `1.00`～`7.50`，省略时为 `4.00`；两端必须一致。详见 [Carakan 各档实测开销与完整配置](docs/carakan.md)。
 
 </details>
 
-## 源码构建与容器
+<details>
+<summary>Mariner · 只需密码</summary>
 
-工作区使用Go 1.26.10工具链；Go会按`go.work`自动选择。该补丁系列包含Windows异步
-抢占崩溃修复，Windows构建不要使用1.26.0/1.26.1。
+```yaml
+obfs:
+  type: mariner
+  mariner:
+    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
+```
 
-### 本机与交叉编译
+包中哪些字节相关、怎样排列，都由两端从密码算出，无需额外配置。详见 [Mariner 技术文档](docs/mariner.md)。
 
-使用 **Go 1.26.10** 和 **Python 3.11+**。在完整源码根目录运行，保留其中的 `third_party/` 目录：
+</details>
+
+## 拥塞控制
+
+发送太慢会浪费带宽，发得比线路能送达的速度快，数据就会排队，延迟随之升高，甚至丢包。各算法的核心区别在于：**它把什么当成线路已满的信号，又怎样判断可以重新加速。**
+
+| 算法 | 它根据什么调速 |
+| --- | --- |
+| **BBR**（`bbr`，默认） | 看对端每秒实际收到了多少数据，以及包最快多久能来回一次，据此估算同时发出多少数据能把线路用满。它会短暂提速试探余量，再降速让积压的数据排出去，不必等到丢包才调整。 |
+| **[BBRv3](docs/bbrv3-implementation.md)**（`bbr3`，实验性） | 同样估算带宽和往返时间，但会用探测期间的丢包和网络给出的拥塞标记修正上限。如果提速开始造成持续损失，它会收紧允许在途的数据量，再寻找下次探测的机会。 |
+| **[Reno](docs/congestion.md)**（`reno`） | 在稳定传输时，随着数据被确认，逐步增加可以同时发出的数据量；遇到拥塞就减小，再从较低水平线性增长。规则简单，但在带宽大、往返时间长的线路上，回到原速可能较慢。 |
+| **[CUBIC](docs/congestion.md)**（`cubic`） | 和 Reno 一样会在拥塞后退让，但恢复速度取决于距上次拥塞过了多久。它先较快接近上次的发送水平，在旧高点附近放慢增长；如果迟迟没有再拥塞，就加快增长，试探更高的带宽。 |
+| **[COPA](docs/copa.md)**（`copa`，实验性） | 把近期的往返时间与观测到的最低值相比，用多出来的时间估算排队程度。队列短时多发，队列持续变长时少发，因此往往能在丢包前做出调整；和持续把队列填满的连接竞争时，也可能让出较多带宽。 |
+| **[Geodesic](docs/geodesic.md)**（`geodesic`，实验性） | 线路换了一条更远的路径，和路上暂时排了队，都会让回包变慢。它观察连续多轮传输：若每轮最快的回包都比原来慢，且有足够的数据样本，才上调对线路基础延迟的估计，再结合带宽调整发送量。这样不会因为一次延迟尖峰就认定路径变长，代价是确认真实变化也需要时间。 |
+
+**配置时看发送方向。** 客户端的选择影响上传，服务端的选择影响下载，两端可以不同。省略客户端的 `bandwidth.up/down` 即可使用自适应算法；若明确设置带宽且协商成功，对应方向优先用 **Brutal**，按协商的速率发送并默认补偿丢包。服务端可用 `ignoreClientBandwidth: true` 忽略客户端的带宽请求。
+
+```yaml
+congestion:
+  type: bbr
+  bbrProfile: standard
+```
+
+两个容易混淆的设置：
+
+- **`bbrProfile` 调的是试探带宽的力度。** `standard` 是默认值，`conservative` 较克制，`aggressive` 更积极。激进模式可能更早用上空闲带宽，也可能只增加排队。BBR 和 BBRv3 都有这三档，但[具体参数](docs/bbrv3-profiles.md)各自独立。
+- **`slowStart: hystart++` 调的是起步阶段，只用于 Reno 或 CUBIC。** 刚开始发送时，如果连续采样发现回包变慢，它会先放缓增长。延迟回落就恢复原来的增长速度，持续偏高才结束快速起步，避免把一次抖动误判成线路已满。
+
+## 使用与构建
+
+常规客户端、服务端和证书配置见 [Hysteria 2 官方指南](https://hysteria.network/zh/)。OMHY 沿用 `hy2://` / `hysteria2://` 分享链接；`share -c client.yaml --qr` 可从客户端配置生成链接和二维码，二者都包含登录凭证。
+
+从源码构建使用 Go 1.26.10、Python 3.11+，并保留仓库中的 `third_party/`：
 
 ```sh
 python hyperbole.py build -r
 ```
 
-产物位于 `build/`，默认构建本机平台。构建脚本支持以下环境变量：
-
-| 环境变量 | 默认值 | 用途 |
-| --- | --- | --- |
-| `OH_MY_HYSTERIA_PLATFORMS` | 本机平台 | 逗号分隔的目标平台，如 `windows/amd64,linux/amd64,linux/arm64` |
-| `OH_MY_HYSTERIA_VERSION` | `VERSION` 文件中的版本 | 覆盖构建版本 |
-| `OH_MY_HYSTERIA_COMMIT` | 当前 Git 提交 | 覆盖构建提交信息 |
-
-例如在 PowerShell 中构建 Linux 两种架构：
-
-```powershell
-$env:OH_MY_HYSTERIA_PLATFORMS = "linux/amd64,linux/arm64"
-python hyperbole.py build -r
-```
-
-### Docker
-
-先在源码目录构建镜像：
-
-```sh
-docker build -t oh-my-hysteria:1.2.0 .
-```
-
-再在存放 `server.yaml`、`server.crt`、`server.key` 的配置目录启动：
-
-```sh
-docker run -d --name oh-my-hysteria \
-  -p 443:443/udp \
-  -v "$PWD:/etc/oh-my-hysteria:ro" \
-  oh-my-hysteria:1.2.0 server -c /etc/oh-my-hysteria/server.yaml
-```
-
-## 更多文档
-
-- [Hysteria2 常规配置与使用](https://hysteria.network/)
-- [CUBIC / HyStart++](docs/congestion.md)
-- [BBRv3](docs/bbrv3-implementation.md) · [BBRv3 预设](docs/bbrv3-profiles.md)
-- [COPA](docs/copa.md) · [Geodesic](docs/geodesic.md)
-- [Blink 协议与资源预算](docs/blink.md)
-- [混淆共同说明与选型](docs/obfuscation.md)
-- [Presto 流量语法](docs/presto.md)
-- [Trident 字节码方言](docs/trident.md)
-- [Carakan 降熵整形](docs/carakan.md)
-- [v1.1.0 发布说明与准备清单](docs/release-v1.1.0.md)
-- [v1.2.0 发布说明与准备清单](docs/release-v1.2.0.md)
-- [Servo](docs/servo.md) · [Tasman](docs/tasman.md) · [Mariner](docs/mariner.md)
-
-<details>
-<summary>贡献代码：运行测试</summary>
-
-```sh
-python -m unittest discover -s tests
-uv sync --locked
-uv run python hyperbole.py test
-go test ./third_party/quic-go ./third_party/quic-go/internal/... ./third_party/quic-go/http3
-```
-
-</details>
+本机平台的产物位于 `build/`。也可在源码目录运行 `docker build -t oh-my-hysteria:1.2.1 .` 构建服务端镜像。各版本的测试环境、流量开销和已知限制见[构建与测试记录](BUILD-REPORT.md)。
 
 ## 许可与致谢
 
-项目原创新增内容采用 [MIT-0](LICENSE.md)。继承的 Hysteria2 / quic-go 代码保留 MIT，
-COPA 适配保留 TQUIC Apache-2.0，Geodesic 适配保留 KCC 的 BSD 选项及 UCP MIT。
-完整声明见 [第三方许可](LICENSE-THIRD-PARTY.md)；分发二进制时请一并保留随附许可文件。
+感谢 Hysteria 2、quic-go 以及相关开源项目的开发者。
 
-感谢 Hysteria2、quic-go 及相关算法与工具项目的开发者。
+| 贡献者 | 工作 |
+| --- | --- |
+| [zjl88858](https://github.com/zjl88858) | 项目维护者 |
+| **GPT-6.1 Sol（OpenAI）** | 共同开发者（Co-Developer），负责截至 **v1.2.0（含）** 的开发工作 |
+| **GPT-6.2 Astra（OpenAI）** | 共同开发者（Co-Developer），从 **v1.2.1** 起接手后续开发 |
+| **Gemini-4 Carbon** | 代码审查（Code Review） |
 
-- Maintainer：[zjl88858](https://github.com/zjl88858)
-- Co-Developer：**GPT-6.1 Sol（OpenAI）**
+项目原创新增内容采用 [MIT-0 许可](LICENSE.md)。Hysteria 2、quic-go 及其他第三方代码保留各自许可，详见[第三方许可声明](LICENSE-THIRD-PARTY.md)。分发程序时请一并保留随附的许可文件。

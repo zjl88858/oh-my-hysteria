@@ -261,7 +261,7 @@ func TestChromeCryptoSplitFirstInitialCarriesHeadAndTail(t *testing.T) {
 	}
 	tp.initialStream.Write(hello)
 
-	tp.pnManager.EXPECT().PeekPacketNumber(protocol.EncryptionInitial).
+	tp.pnManager.EXPECT().PeekPacketNumber(protocol.PacketNumberSpaceInitial).
 		Return(protocol.PacketNumber(1), protocol.PacketNumberLen1)
 	tp.ackFramer.EXPECT().GetAckFrame(protocol.EncryptionInitial, now, gomock.Any())
 	// Withholding the Initial ACK is conditional on Handshake keys existing,

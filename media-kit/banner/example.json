@@ -1,0 +1,8 @@
+{
+  "version": "1.2.1",
+  "highlights": [
+    { "title": "Expression ACLs", "desc": "Translate and test rules with the ACL command" },
+    { "title": "UDP forwarding", "desc": "Less per-packet work for repeated destinations" },
+    { "title": "Updated QUIC transport", "desc": "New upstream base with OMHY congestion hooks" }
+  ]
+}

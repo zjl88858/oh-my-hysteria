@@ -136,6 +136,26 @@ func TestCubicSenderPacing(t *testing.T) {
 	require.Less(t, delay.Sub(monotime.Time(*sender.clock)), time.Hour)
 }
 
+func TestCubicSenderPacingRate(t *testing.T) {
+	const rtt = 100 * time.Millisecond
+	var clock mockClock
+	clock.Advance(time.Second)
+	rttStats := utils.NewRTTStats()
+	rttStats.UpdateRTT(rtt, 0)
+	sender := NewCubicSender(&clock, rttStats, &utils.ConnectionStats{}, maxDatagramSize, true, nil)
+
+	// Exhaust the burst allowance before checking the pacing rate.
+	for pn := protocol.PacketNumber(0); sender.HasPacingBudget(clock.Now()); pn++ {
+		sender.OnPacketSent(clock.Now(), 0, pn, maxDatagramSize, true)
+	}
+	require.Equal(t, rtt/(2*initialCongestionWindow), sender.TimeUntilSend(0).Sub(clock.Now()))
+
+	sender.OnCongestionEvent(0, maxDatagramSize, sender.GetCongestionWindow())
+	require.False(t, sender.InSlowStart())
+	wantDelay := float64(rtt) * float64(maxDatagramSize) / (1.25 * float64(sender.GetCongestionWindow()))
+	require.InDelta(t, wantDelay, float64(sender.TimeUntilSend(0).Sub(clock.Now())), float64(time.Microsecond))
+}
+
 func TestCubicSenderApplicationLimitedSlowStart(t *testing.T) {
 	sender := newTestCubicSender(false)
 
@@ -219,6 +239,7 @@ func TestCubicSenderSlowStartPacketLoss(t *testing.T) {
 	require.True(t, sender.sender.hybridSlowStart.Started())
 	sender.sender.OnRetransmissionTimeout(true)
 	require.False(t, sender.sender.hybridSlowStart.Started())
+	require.Zero(t, sender.sender.undoState)
 }
 
 func TestCubicSenderSlowStartPacketLossPRR(t *testing.T) {
@@ -349,6 +370,9 @@ func TestCubicSenderTCPCubicResetEpochOnQuiescence(t *testing.T) {
 	savedCwnd := sender.sender.GetCongestionWindow()
 	sender.LoseNPackets(1)
 	require.Greater(t, savedCwnd, sender.sender.GetCongestionWindow())
+	postLossWindow := sender.sender.GetCongestionWindow()
+	sender.sender.OnSpuriousLoss(1)
+	require.Equal(t, postLossWindow, sender.sender.GetCongestionWindow())
 
 	// Ack the rest of the outstanding packets to get out of recovery.
 	for i := 1; i < numSent; i++ {
@@ -394,6 +418,71 @@ func TestCubicSenderMultipleLossesInOneWindow(t *testing.T) {
 	// Lose a later packet and ensure the window decreases.
 	sender.LosePacket(sender.packetNumber)
 	require.Greater(t, postLossWindow, sender.sender.GetCongestionWindow())
+}
+
+func TestCubicSenderSpuriousLoss(t *testing.T) {
+	sender := newTestCubicSender(false)
+	sender.SendAvailableSendWindow()
+	sender.LoseNPackets(1)
+	sender.AckNPackets(9)
+
+	sender.SendAvailableSendWindow()
+	sender.AckNPackets(1) // packet 11 exits recovery and earns one ACK of Reno credit
+	window := sender.sender.GetCongestionWindow()
+	sender.LoseNPackets(2) // packets 12 and 13 belong to the new recovery period
+	reducedWindow := sender.sender.GetCongestionWindow()
+	sender.sender.OnSpuriousLoss(1)
+	require.Equal(t, reducedWindow, sender.sender.GetCongestionWindow())
+	sender.sender.OnSpuriousLoss(12)
+	require.Equal(t, reducedWindow, sender.sender.GetCongestionWindow())
+	sender.sender.OnSpuriousLoss(13)
+	require.Equal(t, window, sender.sender.GetCongestionWindow())
+	require.Equal(t, window, sender.sender.slowStartThreshold)
+	require.False(t, sender.sender.InRecovery())
+	require.Zero(t, sender.sender.undoState)
+
+	// Restoring the ACK credit lets the seventh ACK grow the window.
+	sender.AckNPackets(4)
+	sender.SendAvailableSendWindow()
+	sender.AckNPackets(1)
+	require.Equal(t, window, sender.sender.GetCongestionWindow())
+	sender.AckNPackets(1)
+	require.Equal(t, window+maxDatagramSize, sender.sender.GetCongestionWindow())
+}
+
+func TestCubicSenderSpuriousLossAfterWindowGrowth(t *testing.T) {
+	sender := newTestCubicSender(false)
+	sender.SendAvailableSendWindow()
+	sender.LoseNPackets(1)
+	sender.AckNPackets(9)
+	for sender.sender.GetCongestionWindow() <= defaultWindowTCP {
+		sender.AckNPackets(sender.SendAvailableSendWindow())
+	}
+	window := sender.sender.GetCongestionWindow()
+	sender.sender.OnSpuriousLoss(1)
+	require.Equal(t, window, sender.sender.GetCongestionWindow())
+	require.False(t, sender.sender.InSlowStart())
+	require.Zero(t, sender.sender.undoState)
+}
+
+func TestCubicSenderSpuriousLossWithECN(t *testing.T) {
+	for _, ecnFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ECN first %t", ecnFirst), func(t *testing.T) {
+			sender := newTestCubicSender(false)
+			sender.SendAvailableSendWindow()
+			if ecnFirst {
+				sender.sender.OnCongestionEvent(10, 0, sender.bytesInFlight)
+			}
+			sender.LoseNPackets(1)
+			if !ecnFirst {
+				sender.sender.OnCongestionEvent(10, 0, sender.bytesInFlight)
+			}
+			window := sender.sender.GetCongestionWindow()
+			sender.sender.OnSpuriousLoss(1)
+			require.Equal(t, window, sender.sender.GetCongestionWindow())
+			require.False(t, sender.sender.InSlowStart())
+		})
+	}
 }
 
 func TestCubicSender1ConnectionCongestionAvoidanceAtEndOfRecovery(t *testing.T) {
@@ -482,10 +571,12 @@ func TestCubicSenderResetAfterConnectionMigration(t *testing.T) {
 	require.Equal(t, expectedSendWindow, sender.sender.slowStartThreshold)
 
 	// Resets cwnd and slow start threshold on connection migrations.
+	require.NotZero(t, sender.sender.undoState)
 	sender.sender.OnConnectionMigration()
 	require.Equal(t, defaultWindowTCP, sender.sender.GetCongestionWindow())
 	require.Equal(t, MaxCongestionWindow, sender.sender.slowStartThreshold)
 	require.False(t, sender.sender.hybridSlowStart.Started())
+	require.Zero(t, sender.sender.undoState)
 }
 
 func TestCubicSenderSlowStartsUpToMaximumCongestionWindow(t *testing.T) {
@@ -512,7 +603,7 @@ func TestCubicSenderSlowStartsUpToMaximumCongestionWindow(t *testing.T) {
 
 func TestCubicSenderMaximumPacketSizeReduction(t *testing.T) {
 	sender := newTestCubicSender(false)
-	require.Panics(t, func() { sender.sender.SetMaxDatagramSize(initialMaxDatagramSize - 1) })
+	require.NotPanics(t, func() { sender.sender.SetMaxDatagramSize(protocol.MinInitialPacketSize) })
 }
 
 func TestCubicSenderSlowStartsPacketSizeIncrease(t *testing.T) {

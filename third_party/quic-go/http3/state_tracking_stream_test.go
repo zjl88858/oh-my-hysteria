@@ -3,7 +3,6 @@ package http3
 import (
 	"context"
 	"io"
-	"net"
 	"os"
 	"testing"
 	"time"
@@ -34,16 +33,21 @@ func newStreamPair(t *testing.T) (client, server *quic.Stream) {
 	return clientStr, serverStr
 }
 
-func canceledCtx() context.Context {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	return ctx
-}
-
 func checkDatagramReceive(t *testing.T, str *stateTrackingStream) {
 	t.Helper()
-	_, err := str.ReceiveDatagram(canceledCtx())
-	require.ErrorIs(t, err, context.Canceled)
+	str.enqueueDatagram([]byte("test"))
+	data, err := str.ReceiveDatagram(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []byte("test"), data)
+}
+
+// checkDatagramReceiveError checks that the receive side of the stream registered an error.
+// Datagrams are dropped once this happens, so ReceiveDatagram returns the error right away.
+func checkDatagramReceiveError(t *testing.T, str *stateTrackingStream, expectedErr error) {
+	t.Helper()
+	str.enqueueDatagram([]byte("test"))
+	_, err := str.ReceiveDatagram(context.Background())
+	require.ErrorIs(t, err, expectedErr)
 }
 
 func checkDatagramSend(t *testing.T, str *stateTrackingStream) {
@@ -107,9 +111,7 @@ func testStateTrackingStreamRead(t *testing.T, reset bool) {
 		require.ErrorIs(t, err, expectedErr)
 	}
 	require.Nil(t, clearer.cleared)
-	// the receive side registered the error
-	_, err = str.ReceiveDatagram(canceledCtx())
-	require.ErrorIs(t, err, expectedErr)
+	checkDatagramReceiveError(t, str, expectedErr)
 	// the send side is still open
 	require.NoError(t, str.SendDatagram([]byte("foo")))
 }
@@ -137,16 +139,21 @@ func TestStateTrackingStreamRemoteCancelation(t *testing.T) {
 
 	server.CancelRead(123)
 
-	var writeErr error
-	require.Eventually(t, func() bool {
-		_, writeErr = str.Write([]byte("bar"))
-		return writeErr != nil
-	}, time.Second, scaleDuration(time.Millisecond))
+	select {
+	case <-client.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
 	expectedErr := &quic.StreamError{Remote: true, StreamID: server.StreamID(), ErrorCode: 123}
-	require.ErrorIs(t, writeErr, expectedErr)
+	// SendDatagram fails as soon as the context is canceled, even if Write wasn't called
+	require.ErrorIs(t, str.SendDatagram([]byte("test")), expectedErr)
+	// closing the stream doesn't replace the peer's error
+	str.Close()
+	require.ErrorIs(t, str.SendDatagram([]byte("test")), expectedErr)
+	_, err = str.Write([]byte("bar"))
+	require.ErrorIs(t, err, expectedErr)
 	require.Nil(t, clearer.cleared)
 	checkDatagramReceive(t, str)
-	require.ErrorIs(t, str.SendDatagram([]byte("test")), expectedErr)
 }
 
 func TestStateTrackingStreamLocalCancelation(t *testing.T) {
@@ -178,15 +185,7 @@ func TestStateTrackingStreamClose(t *testing.T) {
 	checkDatagramSend(t, str)
 
 	require.NoError(t, client.Close())
-	require.Eventually(t, func() bool {
-		err := str.SendDatagram([]byte("test"))
-		if err == nil {
-			return false
-		}
-		require.ErrorIs(t, err, context.Canceled)
-		return true
-	}, time.Second, scaleDuration(5*time.Millisecond))
-
+	require.ErrorIs(t, str.SendDatagram([]byte("test")), quic.ErrStreamClosed)
 	checkDatagramReceive(t, str)
 	require.Nil(t, clearer.cleared)
 }
@@ -205,8 +204,7 @@ func TestStateTrackingStreamReceiveThenSend(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Nil(t, clearer.cleared)
-	_, err = str.ReceiveDatagram(canceledCtx())
-	require.ErrorIs(t, err, io.EOF)
+	checkDatagramReceiveError(t, str, io.EOF)
 
 	client.CancelWrite(123)
 
@@ -243,8 +241,7 @@ func TestStateTrackingStreamSendThenReceive(t *testing.T) {
 
 	_, err = io.ReadAll(str)
 	require.NoError(t, err)
-	_, err = str.ReceiveDatagram(canceledCtx())
-	require.ErrorIs(t, err, io.EOF)
+	checkDatagramReceiveError(t, str, io.EOF)
 
 	require.Equal(t, &id, clearer.cleared)
 }
@@ -296,6 +293,15 @@ func TestDatagramReceiving(t *testing.T) {
 	cancel()
 	_, err := str.ReceiveDatagram(ctx)
 	require.ErrorIs(t, err, context.Canceled)
+
+	// a canceled context takes precedence over queued datagrams
+	str.enqueueDatagram([]byte("foo"))
+	_, err = str.ReceiveDatagram(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	// the datagram is still queued
+	data, err := str.ReceiveDatagram(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []byte("foo"), data)
 }
 
 func TestDatagramSending(t *testing.T) {
@@ -313,7 +319,4 @@ func TestDatagramSending(t *testing.T) {
 	require.NoError(t, str.SendDatagram([]byte("bar")))
 	require.ErrorIs(t, str.SendDatagram([]byte("baz")), assert.AnError)
 	require.Equal(t, [][]byte{[]byte("foo"), []byte("bar"), []byte("baz")}, sendQueue)
-
-	str.closeSend(net.ErrClosed)
-	require.ErrorIs(t, str.SendDatagram([]byte("foobar")), net.ErrClosed)
 }

@@ -100,14 +100,7 @@ func (h *sendQueue) Run() error {
 			// make sure that all queued packets are actually sent out
 			shouldClose = true
 		case e := <-h.queue:
-			var err error
-			if timed, ok := h.conn.(interface {
-				WriteWithQUICSendTime([]byte, uint16, protocol.ECN, time.Time) error
-			}); ok && !e.sentAt.IsZero() {
-				err = timed.WriteWithQUICSendTime(e.buf.Data, e.gsoSize, e.ecn, e.sentAt)
-			} else {
-				err = h.conn.Write(e.buf.Data, e.gsoSize, e.ecn)
-			}
+			err := writePacketAt(h.conn, e.buf.Data, e.gsoSize, e.ecn, e.sentAt)
 			if err != nil {
 				// This additional check enables:
 				// 1. Checking for "datagram too large" message from the kernel, as such,

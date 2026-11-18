@@ -22,7 +22,7 @@ func chromeTestParams() *TransportParameters {
 		InitialMaxStreamDataUni:        6291456,
 		MaxBidiStreamNum:               100,
 		MaxUniStreamNum:                103,
-		InitialSourceConnectionID:      protocol.ConnectionID{},
+		InitialSourceConnectionID:      protocol.ZeroLengthConnectionID,
 		MaxDatagramFrameSize:           65536,
 		ChromeFingerprint:              true,
 	}

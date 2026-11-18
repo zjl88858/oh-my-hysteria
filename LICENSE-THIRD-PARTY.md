@@ -18,7 +18,9 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 
 Source: https://github.com/apernet/quic-go
 
-Version: `v0.63.1-0.20261004180939-a10df75c260c`.
+Original CUBIC adaptation base: `v0.63.1-0.20261004180939-a10df75c260c`.
+The vendored transport in `third_party/quic-go/` is now based on
+`v0.65.1-0.20261109005002-2895f039137a` under the same MIT license.
 The CUBIC sender, growth function, legacy slow start and pacer under
 `core/internal/congestion/cubic/` are adapted from quic-go's internal congestion
 implementation. HyStart++ is a new implementation based on RFC 9406, not the
@@ -48,6 +50,33 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ## Other third-party code
+
+The optional banner tool includes Chakra Petch and Poppins fonts. Their SIL Open
+Font License 1.1 notices accompany the font files in `media-kit/banner/fonts/`.
+
+### Expr — MIT License
+
+The ACL expression engine uses `github.com/expr-lang/expr` v1.17.8.
+
+Copyright (c) 2018 Anton Medvedev
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ### Carakan tANS design (no imported entropy-coder implementation)
 

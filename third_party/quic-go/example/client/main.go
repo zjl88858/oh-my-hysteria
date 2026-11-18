@@ -13,8 +13,8 @@ import (
 
 	"github.com/apernet/quic-go"
 	"github.com/apernet/quic-go/http3"
-	"github.com/apernet/quic-go/http3/qlog"
 	"github.com/apernet/quic-go/internal/testdata"
+	"github.com/apernet/quic-go/qlog"
 )
 
 func main() {

@@ -40,7 +40,7 @@ type serverOpts struct {
 		sendConn,
 		connRunner,
 		protocol.ConnectionID, // original dest connection ID
-		*protocol.ConnectionID, // retry src connection ID
+		protocol.ConnectionID, // retry src connection ID
 		protocol.ConnectionID, // client dest connection ID
 		protocol.ConnectionID, // destination connection ID
 		protocol.ConnectionID, // source connection ID
@@ -198,7 +198,7 @@ func checkRetry(t *testing.T,
 					Version:          parsedHdr.Version,
 					Token:            &qlog.Token{Raw: parsedHdr.Token},
 				},
-				Raw: qlog.RawInfo{Length: n},
+				Raw: qlog.RawInfo{Length: n, PayloadLength: qlog.OmitLength},
 			},
 		},
 		eventRecorder.Events(qlog.PacketSent{}),
@@ -358,7 +358,7 @@ func testServerDroppedPacket(t *testing.T,
 	}
 
 	var expectedPacketNumber protocol.PacketNumber
-	if expectedPacketType != qlog.PacketTypeVersionNegotiation && expectedPacketType != "" {
+	if expectedPacketType != "" || expectedVersion != 0 {
 		expectedPacketNumber = protocol.InvalidPacketNumber
 	}
 
@@ -370,7 +370,7 @@ func testServerDroppedPacket(t *testing.T,
 					PacketNumber: expectedPacketNumber,
 					Version:      expectedVersion,
 				},
-				Raw:     qlog.RawInfo{Length: int(p.Size())},
+				Raw:     qlog.RawInfo{Length: int(p.Size()), PayloadLength: qlog.OmitLength},
 				Trigger: expectedDropReason,
 			},
 		},
@@ -452,8 +452,8 @@ func testServerVersionNegotiation(t *testing.T, enabled bool) {
 			require.Equal(t,
 				[]qlogwriter.Event{
 					qlog.PacketDropped{
-						Header:  qlog.PacketHeader{Version: 0x42},
-						Raw:     qlog.RawInfo{Length: int(packet.Size())},
+						Header:  qlog.PacketHeader{PacketNumber: protocol.InvalidPacketNumber, Version: 0x42},
+						Raw:     qlog.RawInfo{Length: int(packet.Size()), PayloadLength: qlog.OmitLength},
 						Trigger: qlog.PacketDropUnexpectedVersion,
 					},
 				},
@@ -616,7 +616,7 @@ func testServerTokenValidation(
 						PacketNumber: protocol.InvalidPacketNumber,
 						Version:      hdr.Version,
 					},
-					Raw:     qlog.RawInfo{Length: int(packet.Size())},
+					Raw:     qlog.RawInfo{Length: int(packet.Size()), PayloadLength: qlog.OmitLength},
 					Trigger: qlog.PacketDropPayloadDecryptError,
 				},
 			},
@@ -640,7 +640,7 @@ type connConstructorArgs struct {
 	connRunner       connRunner
 	config           *Config
 	origDestConnID   protocol.ConnectionID
-	retrySrcConnID   *protocol.ConnectionID
+	retrySrcConnID   protocol.ConnectionID
 	clientDestConnID protocol.ConnectionID
 	destConnID       protocol.ConnectionID
 	srcConnID        protocol.ConnectionID
@@ -667,7 +667,7 @@ func (r *connConstructorRecorder) NewConn(
 	_ sendConn,
 	connRunner connRunner,
 	origDestConnID protocol.ConnectionID,
-	retrySrcConnID *protocol.ConnectionID,
+	retrySrcConnID protocol.ConnectionID,
 	clientDestConnID protocol.ConnectionID,
 	destConnID protocol.ConnectionID,
 	srcConnID protocol.ConnectionID,
@@ -771,10 +771,10 @@ func testServerCreateConnection(t *testing.T, useRetry bool) {
 	if useRetry {
 		assert.Equal(t, protocol.ParseConnectionID([]byte{5, 4, 3, 2, 1}), args.destConnID)
 		assert.Equal(t, protocol.ParseConnectionID([]byte{0xde, 0xad, 0xc0, 0xde}), args.origDestConnID)
-		assert.Equal(t, protocol.ParseConnectionID([]byte{0xde, 0xca, 0xfb, 0xad}), *args.retrySrcConnID)
+		assert.Equal(t, protocol.ParseConnectionID([]byte{0xde, 0xca, 0xfb, 0xad}), args.retrySrcConnID)
 	} else {
 		assert.Equal(t, protocol.ParseConnectionID([]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}), args.origDestConnID)
-		assert.Zero(t, args.retrySrcConnID)
+		assert.False(t, args.retrySrcConnID.Valid())
 	}
 
 	for range 3 {
@@ -898,7 +898,7 @@ func TestServerReceiveQueue(t *testing.T) {
 			_ sendConn,
 			_ connRunner,
 			_ protocol.ConnectionID,
-			_ *protocol.ConnectionID,
+			_ protocol.ConnectionID,
 			_ protocol.ConnectionID,
 			_ protocol.ConnectionID,
 			_ protocol.ConnectionID,
@@ -943,7 +943,7 @@ func TestServerReceiveQueue(t *testing.T) {
 	require.Equal(t,
 		[]qlogwriter.Event{
 			qlog.PacketDropped{
-				Raw:     qlog.RawInfo{Length: int(p.Size())},
+				Raw:     qlog.RawInfo{Length: int(p.Size()), PayloadLength: qlog.OmitLength},
 				Trigger: qlog.PacketDropDOSPrevention,
 			},
 		},
@@ -1114,7 +1114,7 @@ func TestServerAcceptQueue(t *testing.T) {
 
 func TestServer0RTTReordering(t *testing.T) {
 	var eventRecorder events.Recorder
-	packets := make(chan receivedPacket, protocol.Max0RTTQueueLen+1)
+	packets := make(chan receivedPacket, max0RTTQueueLen+1)
 	done := make(chan struct{})
 	recorder := newConnConstructorRecorder(&connTestHooks{
 		handlePacket:   func(p receivedPacket) { packets <- p },
@@ -1131,7 +1131,7 @@ func TestServer0RTTReordering(t *testing.T) {
 
 	var zeroRTTPackets []receivedPacket
 
-	for range protocol.Max0RTTQueueLen {
+	for range max0RTTQueueLen {
 		p := getLongHeaderPacket(t,
 			&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 42},
 			&wire.ExtendedHeader{
@@ -1180,7 +1180,7 @@ func TestServer0RTTReordering(t *testing.T) {
 					PacketNumber: protocol.InvalidPacketNumber,
 					Version:      protocol.Version1,
 				},
-				Raw:     qlog.RawInfo{Length: int(p.Size())},
+				Raw:     qlog.RawInfo{Length: int(p.Size()), PayloadLength: qlog.OmitLength},
 				Trigger: qlog.PacketDropDOSPrevention,
 			},
 		},
@@ -1191,7 +1191,7 @@ func TestServer0RTTReordering(t *testing.T) {
 	initial := getValidInitialPacket(t, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 42}, randConnID(5), connID)
 	server.handlePacket(initial)
 
-	for i := range protocol.Max0RTTQueueLen + 1 {
+	for i := range max0RTTQueueLen + 1 {
 		select {
 		case p := <-packets:
 			if i == 0 {
@@ -1211,6 +1211,12 @@ func TestServer0RTTReordering(t *testing.T) {
 	}
 }
 
+func TestServer0RTTPacketQueueCapacities(t *testing.T) {
+	// Ensure that the session can queue more packets than the 0-RTT queue
+	require.Greater(t, protocol.MaxConnUnprocessedPackets, max0RTTQueueLen)
+	require.Greater(t, protocol.MaxUndecryptablePackets, max0RTTQueueLen)
+}
+
 func TestServer0RTTQueueing(t *testing.T) {
 	var eventRecorder events.Recorder
 	server := newTestServer(t, &serverOpts{
@@ -1219,9 +1225,9 @@ func TestServer0RTTQueueing(t *testing.T) {
 	})
 
 	firstRcvTime := monotime.Now()
-	otherRcvTime := firstRcvTime.Add(protocol.Max0RTTQueueingDuration / 2)
+	otherRcvTime := firstRcvTime.Add(max0RTTQueueingDuration / 2)
 	var sizes []protocol.ByteCount
-	for i := range protocol.Max0RTTQueues {
+	for i := range max0RTTQueues {
 		b := make([]byte, 16)
 		rand.Read(b)
 		connID := protocol.ParseConnectionID(b)
@@ -1278,7 +1284,7 @@ func TestServer0RTTQueueing(t *testing.T) {
 					PacketNumber: protocol.InvalidPacketNumber,
 					Version:      protocol.Version1,
 				},
-				Raw:     qlog.RawInfo{Length: int(p.Size())},
+				Raw:     qlog.RawInfo{Length: int(p.Size()), PayloadLength: qlog.OmitLength},
 				Trigger: qlog.PacketDropDOSPrevention,
 			},
 		},
@@ -1303,7 +1309,7 @@ func TestServer0RTTQueueing(t *testing.T) {
 		},
 		make([]byte, 123),
 	)
-	triggerPacket.rcvTime = firstRcvTime.Add(protocol.Max0RTTQueueingDuration + time.Nanosecond)
+	triggerPacket.rcvTime = firstRcvTime.Add(max0RTTQueueingDuration + time.Nanosecond)
 	server.handlePacket(triggerPacket)
 	require.Eventually(t,
 		func() bool { return len(eventRecorder.Events(qlog.PacketDropped{})) == 2 },
@@ -1318,7 +1324,7 @@ func TestServer0RTTQueueing(t *testing.T) {
 					PacketNumber: protocol.InvalidPacketNumber,
 					Version:      protocol.Version1,
 				},
-				Raw:     qlog.RawInfo{Length: int(triggerPacket.Size())},
+				Raw:     qlog.RawInfo{Length: int(triggerPacket.Size()), PayloadLength: qlog.OmitLength},
 				Trigger: qlog.PacketDropUnexpectedPacket,
 			},
 			qlog.PacketDropped{
@@ -1327,7 +1333,7 @@ func TestServer0RTTQueueing(t *testing.T) {
 					PacketNumber: protocol.InvalidPacketNumber,
 					Version:      protocol.Version1,
 				},
-				Raw:     qlog.RawInfo{Length: int(sizes[0])},
+				Raw:     qlog.RawInfo{Length: int(sizes[0]), PayloadLength: qlog.OmitLength},
 				Trigger: qlog.PacketDropDOSPrevention,
 			},
 		},
@@ -1350,7 +1356,7 @@ func TestServer0RTTQueueing(t *testing.T) {
 		},
 		make([]byte, 124),
 	)
-	triggerPacket.rcvTime = otherRcvTime.Add(protocol.Max0RTTQueueingDuration + time.Nanosecond)
+	triggerPacket.rcvTime = otherRcvTime.Add(max0RTTQueueingDuration + time.Nanosecond)
 	server.handlePacket(triggerPacket)
 
 	expectedEvents := []qlogwriter.Event{
@@ -1360,18 +1366,18 @@ func TestServer0RTTQueueing(t *testing.T) {
 				PacketNumber: protocol.InvalidPacketNumber,
 				Version:      protocol.Version1,
 			},
-			Raw:     qlog.RawInfo{Length: int(triggerPacket.Size())},
+			Raw:     qlog.RawInfo{Length: int(triggerPacket.Size()), PayloadLength: qlog.OmitLength},
 			Trigger: qlog.PacketDropUnexpectedPacket,
 		},
 	}
-	for i := range protocol.Max0RTTQueues - 1 {
+	for i := range max0RTTQueues - 1 {
 		expectedEvents = append(expectedEvents, qlog.PacketDropped{
 			Header: qlog.PacketHeader{
 				PacketType:   qlog.PacketType0RTT,
 				PacketNumber: protocol.InvalidPacketNumber,
 				Version:      protocol.Version1,
 			},
-			Raw:     qlog.RawInfo{Length: int(sizes[i+1])},
+			Raw:     qlog.RawInfo{Length: int(sizes[i+1]), PayloadLength: qlog.OmitLength},
 			Trigger: qlog.PacketDropDOSPrevention,
 		})
 	}

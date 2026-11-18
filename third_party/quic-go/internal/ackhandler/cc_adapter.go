@@ -46,6 +46,10 @@ func (a *ccAdapter) OnCongestionEvent(number protocol.PacketNumber, lostBytes pr
 	a.CC.OnCongestionEvent(congestion.PacketNumber(number), congestion.ByteCount(lostBytes), congestion.ByteCount(priorInFlight))
 }
 
+// OnSpuriousLoss is a no-op: the public congestion control interface has no
+// hook for undoing a congestion event after a loss turns out to be spurious.
+func (a *ccAdapter) OnSpuriousLoss(protocol.PacketNumber) {}
+
 func (a *ccAdapter) OnRetransmissionTimeout(packetsRetransmitted bool) {
 	a.CC.OnRetransmissionTimeout(packetsRetransmitted)
 }
