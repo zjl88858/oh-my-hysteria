@@ -4,6 +4,8 @@ Presto 使用 **Protocol Genome Compiler**，从一个随机密码生成双向�
 前导、分片和突发语法。每个会话在同一语法内随机采样，因此同密码形态相近，具体包序列不同。
 当前派生域为 `oh-my-hysteria/presto/v1`。
 
+需要提高持续传输吞吐时可另选 [PrestoLite](prestolite.md)。Lite 会减少大流的计划停顿，是双方明确选择的独立模式；`presto` 始终使用这里的完整节奏。
+
 [混淆选型、部署要求与安全说明](obfuscation.md) · [返回 README](../README.md)
 
 ## 配置
@@ -103,8 +105,7 @@ HKDF-SHA256 的四个独立 info 域为 `aead/client-to-server`、`aead/server-t
   测试使用发布 CLI、旧 BBR standard 和正常 TLS；中途控制端退出导致原定重复 A 未执行，
   已保留该中断，不将两段短测试作为连续性能比较。
 
-完整形态、开销和公网记录在 `build/presto/`；详细经过见
-[构建与验证历史](../BUILD-REPORT.md)。
+该阶段的形态、开销和公网记录保存在本地 `build/presto/`。与 PrestoLite 的同密码吞吐对照见[文件传输实测](network-test-lite-2026-11-20.md)。
 
 ## 本机复现与来源
 

@@ -101,8 +101,7 @@ Startup/Steady、窗口、队列估计、δ、velocity、round、loss guard 和�
 预算，首次失败停止、无自动重试或裸 QUIC 回退。SSH/上传/VPS 内部测试不走 LTE。
 这些短传输不验证稳态、公平性或长期稳定性，也不等于运营商计费流量。
 
-实际测试和失败历史见 [COPA 网络验证](network-test-copa-2026-10-29.md)，
-构建 / 产物对应关系见 [BUILD-REPORT.md](../BUILD-REPORT.md)。
+实际测试条件、结果和失败历史见 [COPA 网络验证](network-test-copa-2026-10-29.md)。
 
 本轮最终受控 **30/30**、LTE 冒烟 **2/2** 双向完成，状态错误最大 0；Linux
 race / vet / 30 秒 fuzz 通过，Windows / Linux 包覆盖率 99.6%。LTE 应用负载

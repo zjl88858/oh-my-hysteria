@@ -2,7 +2,7 @@
 
 v1.2.0 新增。两端只配置同一随机混淆密码；
 同一监听端点共享 profile，用户身份仍由内层 `auth` 处理。共同说明见
-[混淆选型](obfuscation.md)，精确冻结与原始结果见[实现记录](designs/02-TASMAN-IMPLEMENTATION.md)。
+[混淆选型](obfuscation.md)，符号与记录的格式可对照[编解码实现](../extras/obfs/tasman_codec.go)。
 
 ```yaml
 obfs:
@@ -66,8 +66,7 @@ ECN关闭，未恢复的丢失继续由QUIC观察；当前不提供逐外包ACK/
 ## 验证与边界
 
 实现包含独立Python的profile/信封/GF向量、k=2..8额定单/双擦除组合、修复先到、
-跨代乱序与消息去重、零尾/长度检查、资源限额和异步队列测试。实际执行结果及失败
-随[实现记录](designs/02-TASMAN-IMPLEMENTATION.md)归档，未执行项不标通过。
+跨代乱序与消息去重、零尾/长度检查、资源限额和异步队列测试。可用[参考向量](../tests/vectors/tasman-v1.json)与下列命令复核。
 接收FEC状态有3s独立TTL及每peer/全局硬上限；这些上限不承诺1Gbps下不触发容量丢弃。
 
 未做真实其它UDP的未见密码低误报率分类；持续高PPS与单核吞吐未定标。

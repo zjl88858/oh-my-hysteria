@@ -29,7 +29,7 @@ Linux amd64    9b1012b82d46617cf97ad7b2be5ac58eb0b5c84b3ca2251c543e92bbd913b053
 
 ## Linux 回归
 
-以下均通过；具体命令见 [BUILD-REPORT.md](../BUILD-REPORT.md)：
+该轮 Linux 回归通过了以下检查：
 
 - `core/internal/congestion/...` 的 race 检查，包括 CUBIC、BBR、Brutal。
 - `extras/obfs` 的 race 检查，包括 Gecko。

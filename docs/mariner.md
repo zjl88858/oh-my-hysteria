@@ -45,8 +45,7 @@ QUIC原记账保持不变，实际外层字节以该统计或抓包为准。
 ## 验证
 
 编译器、结构和认证有独立Python/Go向量；全长度/密度、篡改、并发nonce、两片重组和
-TLS集成可本地复现。环境、实测倍率、性能、盲分类与消融结果见
-[实现记录](designs/03-MARINER-IMPLEMENTATION.md)。数学关系不同不等于抗分类收益，
+TLS集成可本地复现。可对照[参考向量](../tests/vectors/mariner-v1.json)和[形态分析脚本](../tests/mariner_shape_analysis.py)。数学关系不同不等于抗分类收益，
 当前不以Mariner替代有明确协议伪装需求的方案。
 
 ```sh

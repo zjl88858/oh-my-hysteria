@@ -163,7 +163,7 @@ nonce index 的 `0..k-1` 为数据，`k..k+r-1` 为修复。
   当前格式的公网样本仅覆盖以上两档，默认 H=4 的验证来自本机测试。
 
 完整证据在 `build/carakan-fec/`，包括 `comparison.json`、`spectrum-final-summary.json`
-和 `public/summary.json`。历史阶段单列于 [构建与验证历史](../BUILD-REPORT.md)。
+和 `public/summary.json`；这些是当次测试的本地回执。
 
 ## 本机复现与来源
 

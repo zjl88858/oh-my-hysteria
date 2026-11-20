@@ -113,8 +113,7 @@ Close、deadline 与 socket 接口遵守 PacketConn 约定，批量/GSO 路径�
   已知 ISA 的独立语法检查；发布 CLI 未导出公网验签/重组丢弃计数。
   三次 Trident 整连接 IPv4 字节均值比两次对照高约 47.9%，包含握手与控制流量。
 
-完整记录在 `build/trident/`，开发过程与环境限制见
-[构建与验证历史](../BUILD-REPORT.md)。
+逐次记录保存在本地 `build/trident/`；可用下节命令复核当前实现。
 
 ## 本机复现与来源
 

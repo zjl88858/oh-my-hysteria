@@ -4,7 +4,7 @@ Servo 保存内层 UDP 数据报边界，并将不同数据报的片段放入密
 一个外包可以同时携带上一数据报的尾部和下一数据报的开头；不发送 cover、不主动填充，
 没有 FEC、外层 ARQ 或有序字节流。身份与权限仍使用内层 Hysteria2 `auth`。
 
-v1.2.0 新增。共同要求见[混淆说明](obfuscation.md)，精确格式见[实现记录](designs/01-SERVO-IMPLEMENTATION.md)。
+v1.2.0 新增。共同要求见[混淆说明](obfuscation.md)，报文布局可对照[容器编解码实现](../extras/obfs/servo_codec.go)。
 
 ## 配置
 

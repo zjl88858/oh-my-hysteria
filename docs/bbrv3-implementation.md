@@ -94,8 +94,8 @@ GSO batch 按 Sender 的 send quantum 限制；PMTU 增长更新报文单位及�
 
 ## 验证与限制
 
-命令、当前覆盖率、Linux race / fuzz 和实际网络证据见
-[BUILD-REPORT.md](../BUILD-REPORT.md)。第一阶段 **99.1% 仅指当时 sampler**，
+状态机的回归用例见[控制器测试](../core/internal/congestion/bbr3/sender_test.go)，受控和公网样本见
+[BBRv3 / BBR 回退网络验证](network-test-bbr3-2026-10-29.md)。第一阶段 **99.1% 仅指当时 sampler**，
 不是当前完整控制器覆盖率。现有测试覆盖包号空间、after-send、ACK 压缩、丢包、
 PMTU、loss-only、迟到 ACK、退休顺序、PTO、keys、Retry、迁移、模型 / 状态、
 资源边界、并发 Snapshot、Gecko TCP / UDP 及 BBR 回退。
