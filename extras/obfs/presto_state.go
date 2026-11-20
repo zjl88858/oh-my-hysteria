@@ -22,6 +22,7 @@ const (
 
 type prestoPeer struct {
 	session       [16]byte
+	credit        prestoLiteCredit
 	netfront      *netfrontSession // optional server side lanes; expire with the authenticated primary peer
 	addr          netip.AddrPort
 	source        netip.Prefix
@@ -93,11 +94,17 @@ func (c *prestoPacketConn) maintain(now time.Time, limit int) {
 	}
 }
 
-func (c *prestoPacketConn) verifyBudget(source netip.Prefix, now time.Time) bool {
+func (c *prestoPacketConn) verifyBudget(addr netip.AddrPort, source netip.Prefix, now time.Time) bool {
 	if !c.verify.allow(now, 32768, 4096) {
 		return false
 	}
 	i := maphash.Comparable(c.hashSeed, source) % uint64(len(c.verifyShards))
+	// The global debit above always applies. The normal source bucket is
+	// never refunded. Every admitted fragment still has to pass its own AEAD.
+	if c.lite != nil && c.lite.spend(c.routes[addr], i, now) {
+		c.stats.LiteCreditUses++
+		return true
+	}
 	return c.verifyShards[i].allow(now, 8192, 2048)
 }
 

@@ -7,6 +7,11 @@ import struct
 
 SIZES = (16, 32, 64, 112, 48, 80, 24, 56, 96, 40, 256, 1056)
 MODES = ("presto", "netfront2", "netfront3")
+# The historical field matrix above is fixed. Local interop also exercises
+# the independently selected Lite modes and may mismatch the two endpoints.
+WIRE_MODES = {"presto": ("presto", 0), "prestolite": ("prestolite", 0),
+              "netfront2": ("netfront", 2), "netfront3": ("netfront", 3),
+              "netfrontlite2": ("netfrontlite", 2), "netfrontlite3": ("netfrontlite", 3)}
 ORDERS = ((0, 1, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0), (0, 2, 1), (1, 0, 2))
 EARLY = 9 * 1024 * 1024 // 2
 HARD = 6 * 1024 * 1024
@@ -46,9 +51,9 @@ def decode_id(b, tag, count):
 
 
 def obfuscation(cfg):
-    which = "presto" if cfg["mode"] == "presto" else "netfront"
+    which, sides = WIRE_MODES[cfg["mode"]]
     opts = {"password": cfg["psk"]}
-    if which == "netfront":
+    if sides:
         opts["extraPorts"] = cfg["ports"][1:]
     return {"type": which, which: opts}
 

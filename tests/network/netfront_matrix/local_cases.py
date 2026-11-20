@@ -24,7 +24,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from client import exercise
-from common import MODES, epoch_proofs, nmessages, obfuscation, reconcile, renewed, send_at
+from common import MODES, WIRE_MODES, epoch_proofs, nmessages, obfuscation, reconcile, renewed, send_at
 from endpoint import Echo
 from wire import side_decoder
 
@@ -55,7 +55,7 @@ def bound(kind=socket.SOCK_DGRAM):
 
 
 def group(mode):
-    sockets=[bound() for _ in range({"presto":1,"netfront2":3,"netfront3":4}[mode])]
+    sockets=[bound() for _ in range(1+WIRE_MODES[mode][1])]
     ports=[s.getsockname()[1] for s in sockets]
     for s in sockets:s.close()
     return ports

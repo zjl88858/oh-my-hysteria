@@ -116,17 +116,19 @@ type serverConfigObfsGecko struct {
 }
 
 type serverConfigObfs struct {
-	Type       string                     `mapstructure:"type"`
-	Salamander serverConfigObfsSalamander `mapstructure:"salamander"`
-	Gecko      serverConfigObfsGecko      `mapstructure:"gecko"`
-	Blink      configObfsBlink            `mapstructure:"blink"`
-	Presto     configObfsPresto           `mapstructure:"presto"`
-	NetFront   configObfsNetFront         `mapstructure:"netfront"`
-	Trident    configObfsTrident          `mapstructure:"trident"`
-	Carakan    configObfsCarakan          `mapstructure:"carakan"`
-	Servo      configObfsServo            `mapstructure:"servo"`
-	Tasman     configObfsTasman           `mapstructure:"tasman"`
-	Mariner    configObfsMariner          `mapstructure:"mariner"`
+	Type         string                     `mapstructure:"type"`
+	Salamander   serverConfigObfsSalamander `mapstructure:"salamander"`
+	Gecko        serverConfigObfsGecko      `mapstructure:"gecko"`
+	Blink        configObfsBlink            `mapstructure:"blink"`
+	Presto       configObfsPresto           `mapstructure:"presto"`
+	PrestoLite   configObfsPresto           `mapstructure:"prestolite"`
+	NetFront     configObfsNetFront         `mapstructure:"netfront"`
+	NetFrontLite configObfsNetFront         `mapstructure:"netfrontlite"`
+	Trident      configObfsTrident          `mapstructure:"trident"`
+	Carakan      configObfsCarakan          `mapstructure:"carakan"`
+	Servo        configObfsServo            `mapstructure:"servo"`
+	Tasman       configObfsTasman           `mapstructure:"tasman"`
+	Mariner      configObfsMariner          `mapstructure:"mariner"`
 }
 
 type serverConfigTLS struct {
@@ -346,13 +348,13 @@ type serverConfigMasquerade struct {
 }
 
 func (c *serverConfig) fillConn(hyConfig *server.Config) error {
-	netfront := strings.EqualFold(c.Obfs.Type, "netfront")
+	nf, multiPort := selectNetfront(c.Obfs.Type, c.Obfs.NetFront, c.Obfs.NetFrontLite)
 	if realmAddr, ok, err := parseServerRealmAddr(c.Listen); ok || err != nil {
 		if err != nil {
 			return configError{Field: "listen", Err: err}
 		}
-		if netfront {
-			return netfrontConfigError(errNetfrontTransport)
+		if multiPort {
+			return nf.configError(errNetfrontTransport)
 		}
 		return c.fillRealmConn(hyConfig, realmAddr)
 	}
@@ -364,16 +366,19 @@ func (c *serverConfig) fillConn(hyConfig *server.Config) error {
 	if err != nil {
 		return configError{Field: "listen", Err: err}
 	}
-	if netfront {
+	if multiPort {
 		if len(portUnion) > 0 || c.Mimic.Enabled {
-			return netfrontConfigError(errNetfrontTransport)
+			return nf.configError(errNetfrontTransport)
 		}
-		hyConfig.Conn, err = c.Obfs.NetFront.open(uAddr.Port, nil, func(port int) (net.PacketConn, error) {
+		hyConfig.Conn, err = nf.open(uAddr.Port, nil, func(port int) (net.PacketConn, error) {
 			addr := *uAddr // retain wildcard vs explicit v4/v6 and IPv6 zone on every socket
 			addr.Port = port
 			return correctnet.ListenUDP("udp", &addr)
 		})
 		return err
+	}
+	if len(portUnion) > 0 && strings.EqualFold(c.Obfs.Type, "prestolite") {
+		return configError{Field: "obfs.prestolite", Err: errors.New("PrestoLite does not support port hopping")}
 	}
 	conn, err := correctnet.ListenUDP("udp", uAddr)
 	if err != nil {
@@ -476,6 +481,8 @@ func (c *serverConfig) wrapObfs(conn net.PacketConn) (net.PacketConn, error) {
 			return nil, configError{Field: "obfs.trident", Err: err}
 		}
 		return wrapped, nil
+	case "prestolite":
+		return wrapPrestoLiteConfig(conn, c.Obfs.PrestoLite, true)
 	case "presto":
 		wrapped, err := obfs.WrapPacketConnPresto(conn, c.Obfs.Presto.options(true))
 		if err != nil {

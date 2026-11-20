@@ -31,9 +31,9 @@ type prestoHeaderFields struct {
 	index, count, kind  uint8
 }
 
-func prestoCiphers(password []byte, server bool) (cipher.AEAD, cipher.AEAD, error) {
+func (v prestoVariant) prestoCiphers(password []byte, server bool) (cipher.AEAD, cipher.AEAD, error) {
 	makeCipher := func(direction string) (cipher.AEAD, error) {
-		key, err := prestoDerive(password, "aead/"+direction, 32)
+		key, err := prestoDerive(password, v.authLabel("aead/"+direction), 32)
 		if err != nil {
 			return nil, err
 		}

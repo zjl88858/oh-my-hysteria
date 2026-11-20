@@ -22,9 +22,9 @@ func TestNetFrontRenewalInFlight(t *testing.T) {
 	o := NetFrontOptions{[]byte(netfrontTestKey), []int{45112, 45113}}
 	client, _ := newPrestoTest(t, false)
 	server, _ := newPrestoTest(t, true)
-	cp, err := compileNetfront(o, false)
+	cp, err := prestoStandard.compileNetfront(o, false)
 	require.NoError(t, err)
-	sp, err := compileNetfront(o, true)
+	sp, err := prestoStandard.compileNetfront(o, true)
 	require.NoError(t, err)
 	c := netfrontWire{presto: client, primary: mainS, profile: cp, dests: dests}
 	s := netfrontWire{presto: server, profile: sp}

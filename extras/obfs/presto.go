@@ -31,6 +31,7 @@ type PrestoStats struct {
 	ReceivedPackets, ReceivedWireBytes, DeliveredBytes, ReceivedCoverPackets                            uint64
 	AuthDrops, RateDrops, MalformedDrops, ReplayDrops, ResourceDrops, FreshnessDrops, ExpiredAssemblies uint64
 	Reassembled, EvictedAssemblies                                                                      uint64
+	LiteSkippedPauses, LiteCreditUses                                                                   uint64
 	Sessions, Assemblies, ReassemblyBytes                                                               int
 }
 
@@ -40,6 +41,7 @@ type prestoSender struct {
 	created, used time.Time
 	due           time.Time
 	grammar       prestoGrammar
+	pacing        prestoLitePacing
 	preludeDone   bool
 	netfront      *netfrontSession // optional client side lanes, protected by the connection mutex
 }
@@ -67,12 +69,23 @@ type prestoPacketConn struct {
 	assemblyBytes               int
 	verify, admit               blinkBucket
 	verifyShards                [256]blinkBucket
+	lite                        *prestoLiteBudget
 	hashSeed                    maphash.Seed
 	stats                       PrestoStats
 }
 
 func WrapPacketConnPresto(conn net.PacketConn, opts PrestoOptions) (net.PacketConn, error) {
-	c, err := newPrestoConn(conn, opts)
+	return prestoStandard.wrapPresto(conn, opts)
+}
+
+// WrapPacketConnPrestoLite selects the conservative bulk pacing policy and
+// its own directional authentication keys. Peers must also use PrestoLite.
+func WrapPacketConnPrestoLite(conn net.PacketConn, opts PrestoOptions) (net.PacketConn, error) {
+	return prestoLite.wrapPresto(conn, opts)
+}
+
+func (v prestoVariant) wrapPresto(conn net.PacketConn, opts PrestoOptions) (net.PacketConn, error) {
+	c, err := v.newPrestoConn(conn, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +95,7 @@ func WrapPacketConnPresto(conn net.PacketConn, opts PrestoOptions) (net.PacketCo
 	return c, nil
 }
 
-func newPrestoConn(conn net.PacketConn, opts PrestoOptions) (*prestoPacketConn, error) {
+func (v prestoVariant) newPrestoConn(conn net.PacketConn, opts PrestoOptions) (*prestoPacketConn, error) {
 	if conn == nil {
 		return nil, errors.New("presto: nil packet connection")
 	}
@@ -90,7 +103,7 @@ func newPrestoConn(conn net.PacketConn, opts PrestoOptions) (*prestoPacketConn, 
 	if err != nil {
 		return nil, err
 	}
-	tx, rx, err := prestoCiphers(opts.Password, opts.Server)
+	tx, rx, err := v.prestoCiphers(opts.Password, opts.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -100,6 +113,9 @@ func newPrestoConn(conn net.PacketConn, opts PrestoOptions) (*prestoPacketConn, 
 		readBuf: make([]byte, prestoWireMax+1), plainBuf: make([]byte, 0, prestoWireMax), writeBuf: make([]byte, prestoWireMax),
 		peers: make(map[[16]byte]*prestoPeer), sources: make(map[netip.Prefix]int), routes: make(map[netip.AddrPort]*prestoPeer), senders: make(map[netip.AddrPort]*prestoSender),
 		peerOrder: list.New(), assemblyOrder: list.New(), assemblies: make(map[prestoAssemblyKey]*prestoAssembly), hashSeed: maphash.MakeSeed(),
+	}
+	if v == prestoLite {
+		c.lite = new(prestoLiteBudget)
 	}
 	return c, nil
 }
@@ -141,7 +157,7 @@ func (c *prestoPacketConn) ReadFrom(out []byte) (int, net.Addr, error) {
 			c.mu.Unlock()
 			continue
 		}
-		if !c.verifyBudget(source, time.Now()) {
+		if !c.verifyBudget(ap, source, time.Now()) {
 			c.stats.RateDrops++
 			c.mu.Unlock()
 			continue
@@ -164,7 +180,12 @@ func (c *prestoPacketConn) ReadFrom(out []byte) (int, net.Addr, error) {
 			c.mu.Unlock()
 			continue
 		}
-		data, ready := c.accept(ap, source, h, payload, time.Now())
+		var prior *prestoPeer
+		if c.lite != nil {
+			prior = c.routes[ap]
+		}
+		now := time.Now()
+		data, ready := c.accept(ap, source, h, payload, now)
 		if !ready {
 			c.mu.Unlock()
 			continue
@@ -174,6 +195,11 @@ func (c *prestoPacketConn) ReadFrom(out []byte) (int, net.Addr, error) {
 			return 0, addr, io.ErrShortBuffer
 		}
 		n = copy(out, data)
+		// accept binds the delivering peer to this exact endpoint only after
+		// replay and complete reassembly checks. Never credit a new route.
+		if prior != nil && prior == c.routes[ap] && prestoLiteBulkPacket(data) {
+			prior.credit.earn(now, int(h.count))
+		}
 		c.stats.DeliveredBytes += uint64(n)
 		c.mu.Unlock()
 		return n, addr, nil
@@ -316,8 +342,10 @@ func (c *prestoPacketConn) WriteTo(in []byte, addr net.Addr) (int, error) {
 	}
 	id := s.next
 	s.next++ // Even a partially transmitted message never reuses its ID.
+	bulk := c.lite != nil && s.pacing.enter(in, time.Now())
 	plan := s.grammar.plan(len(in))
 	padding := 0
+	var skipped uint64
 	for i := range plan.count {
 		part := plan.parts[i]
 		if err := c.waitUntil(s.due); err != nil {
@@ -333,6 +361,10 @@ func (c *prestoPacketConn) WriteTo(in []byte, addr net.Addr) (int, error) {
 		}
 		padding += part.wire - prestoOverhead - part.size
 		gap := s.grammar.gap(part.mode)
+		if bulk && gap > 0 && !s.pacing.keep(gap) {
+			gap = 0
+			skipped++
+		}
 		s.due = time.Now().Add(gap)
 		if gap > 0 {
 			c.mu.Lock()
@@ -343,6 +375,7 @@ func (c *prestoPacketConn) WriteTo(in []byte, addr net.Addr) (int, error) {
 	c.mu.Lock()
 	c.stats.SentInnerBytes += uint64(len(in))
 	c.stats.PaddingBytes += uint64(padding)
+	c.stats.LiteSkippedPauses += skipped
 	if plan.count > 1 {
 		c.stats.FragmentedMessages++
 	}

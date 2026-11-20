@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.3.1
+
+- Add [PrestoLite](docs/prestolite.md) and [NetFrontLite](docs/netfrontlite.md)
+  as independent obfuscation types. Sustained bulk traffic keeps the original
+  length, padding and fragment grammar but observes fewer pauses. Lite uses
+  bounded receive credits for established endpoints and separate authentication
+  keys; standard modes do not negotiate or accept a downgrade. NetFrontLite
+  retains two or three authenticated side ports.
+- Existing v1.3.0 configurations keep their original behavior. To use Lite,
+  upgrade both peers and select `prestolite` or `netfrontlite`; the latter
+  uses its own `obfs.netfrontlite.extraPorts` and `netfrontlite-extra-ports`
+  share-URI field. See the [paired file-transfer results](docs/network-test-lite-2026-11-20.md).
+
+[v1.3.1 release notes / 发布说明](docs/release-v1.3.1.md)
+
 ## v1.3.0
 
 - Add [NetFront](docs/netfront.md), an opt-in obfuscation mode with a Presto-based

@@ -127,9 +127,9 @@ func TestPrestoOptionsAndSocketContract(t *testing.T) {
 }
 
 func TestPrestoAuthenticationAndCodec(t *testing.T) {
-	tx, rx, err := prestoCiphers(prestoTestPassword, false)
+	tx, rx, err := prestoStandard.prestoCiphers(prestoTestPassword, false)
 	require.NoError(t, err)
-	_, srx, err := prestoCiphers(prestoTestPassword, true)
+	_, srx, err := prestoStandard.prestoCiphers(prestoTestPassword, true)
 	require.NoError(t, err)
 	h := prestoTestHeader()
 	h.total = 6
@@ -144,7 +144,7 @@ func TestPrestoAuthenticationAndCodec(t *testing.T) {
 	require.Equal(t, []byte("secret"), payload)
 	_, err = rx.Open(nil, wire[:prestoNonce], wire[prestoNonce:], nil)
 	require.Error(t, err)
-	_, wrong, _ := prestoCiphers(bytes.Repeat([]byte{2}, 32), true)
+	_, wrong, _ := prestoStandard.prestoCiphers(bytes.Repeat([]byte{2}, 32), true)
 	_, err = wrong.Open(nil, wire[:prestoNonce], wire[prestoNonce:], nil)
 	require.Error(t, err)
 	_, blinkRX, _ := blinkCiphers(prestoTestPassword, true)
@@ -376,7 +376,7 @@ func TestPrestoInvalidInputAndWriteErrors(t *testing.T) {
 	_, err = c.WriteTo([]byte{1}, blinkServerAddr)
 	require.ErrorIs(t, err, net.ErrClosed)
 	server, sr := newPrestoTest(t, true)
-	tx, _, _ := prestoCiphers(prestoTestPassword, false)
+	tx, _, _ := prestoStandard.prestoCiphers(prestoTestPassword, false)
 	h := prestoTestHeader()
 	h.count = 1
 	h.total = 200
@@ -491,7 +491,7 @@ func FuzzPrestoDecode(f *testing.F) {
 
 func FuzzPrestoReceive(f *testing.F) {
 	f.Add([]byte{})
-	tx, _, _ := prestoCiphers(prestoTestPassword, false)
+	tx, _, _ := prestoStandard.prestoCiphers(prestoTestPassword, false)
 	h := prestoTestHeader()
 	f.Add(prestoTestFrame(tx, h, make([]byte, 600), 0))
 	f.Fuzz(func(t *testing.T, in []byte) {
@@ -518,7 +518,7 @@ func FuzzPrestoAuthenticatedState(f *testing.F) {
 			in = in[:2048]
 		}
 		c, raw := newPrestoTest(t, true)
-		tx, _, _ := prestoCiphers(prestoTestPassword, false)
+		tx, _, _ := prestoStandard.prestoCiphers(prestoTestPassword, false)
 		for i := 0; i+8 <= len(in); i += 8 {
 			b := in[i : i+8]
 			h := prestoTestHeader()

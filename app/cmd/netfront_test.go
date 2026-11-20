@@ -138,17 +138,23 @@ func TestNetFrontBindRollback(t *testing.T) {
 func TestNetFrontTLSAndTransfer(t *testing.T) {
 	cert, roots := carakanDiagnosticCertificate(t)
 	for _, tc := range []struct {
-		host  string
-		lanes int
-	}{{"127.0.0.1", 3}, {"::1", 2}} {
-		t.Run(tc.host, func(t *testing.T) {
+		host, kind string
+		lanes      int
+	}{{"127.0.0.1", "netfront", 3}, {"::1", "netfront", 2}, {"127.0.0.1", "netfrontlite", 2}, {"127.0.0.1", "netfrontlite", 3}} {
+		t.Run(fmt.Sprintf("%s-%s-%d", tc.host, tc.kind, tc.lanes), func(t *testing.T) {
 			res, ports := netfrontLocalGroup(t, tc.host, tc.lanes+1)
 			listen := res[0].LocalAddr().String()
 			for _, r := range res {
 				require.NoError(t, r.Close())
 			}
 			cfg := configObfsNetFront{netfrontCLISecret, ports[1:]}
-			sc := serverConfig{Listen: listen, Obfs: serverConfigObfs{Type: "netfront", NetFront: cfg}}
+			sc := serverConfig{Listen: listen, Obfs: serverConfigObfs{Type: tc.kind}}
+			cc := clientConfig{Server: listen, Auth: "test-only-auth", Obfs: clientConfigObfs{Type: tc.kind}, TLS: clientConfigTLS{SNI: "localhost"}}
+			if tc.kind == "netfrontlite" {
+				sc.Obfs.NetFrontLite, cc.Obfs.NetFrontLite = cfg, cfg
+			} else {
+				sc.Obfs.NetFront, cc.Obfs.NetFront = cfg, cfg
+			}
 			hy := &server.Config{TLSConfig: server.TLSConfig{Certificates: []tls.Certificate{cert}}, Authenticator: geckoTestAuth{}}
 			require.NoError(t, sc.fillConn(hy))
 			_, oob := hy.Conn.(quic.OOBCapablePacketConn)
@@ -158,7 +164,6 @@ func TestNetFrontTLSAndTransfer(t *testing.T) {
 			require.NoError(t, err)
 			defer srv.Close()
 			go srv.Serve()
-			cc := clientConfig{Server: listen, Auth: "test-only-auth", Obfs: clientConfigObfs{Type: "netfront", NetFront: cfg}, TLS: clientConfigTLS{SNI: "localhost"}}
 			shared := clientConfig{Server: cc.URI()}
 			ch, err := shared.Config()
 			require.NoError(t, err)

@@ -39,7 +39,31 @@ func (p *netfrontPorts) UnmarshalMapstructure(input any) error {
 	return nil
 }
 
-func netfrontConfigError(err error) error { return configError{Field: "obfs.netfront", Err: err} }
+// Keep the public sections independent, including the field reported on
+// errors. A missing Lite section must never inherit standard credentials.
+type netfrontMode struct {
+	configObfsNetFront
+	kind string
+}
+
+func selectNetfront(kind string, standard, lite configObfsNetFront) (netfrontMode, bool) {
+	switch strings.ToLower(kind) {
+	case "netfront":
+		return netfrontMode{standard, "netfront"}, true
+	case "netfrontlite":
+		return netfrontMode{lite, "netfrontlite"}, true
+	default:
+		return netfrontMode{}, false
+	}
+}
+
+func (c clientConfigObfs) netfrontMode() (netfrontMode, bool) {
+	return selectNetfront(c.Type, c.NetFront, c.NetFrontLite)
+}
+
+func (m netfrontMode) configError(err error) error {
+	return configError{Field: "obfs." + m.kind, Err: err}
+}
 
 func (c configObfsNetFront) options() obfs.NetFrontOptions {
 	return obfs.NetFrontOptions{Password: []byte(c.Password), ExtraPorts: c.ExtraPorts}
@@ -47,10 +71,10 @@ func (c configObfsNetFront) options() obfs.NetFrontOptions {
 
 // Open as a group: even a failure on the last side port releases the earlier
 // ports. Client opens use the same socket options as the primary connection.
-func (c configObfsNetFront) open(port int, remote *net.UDPAddr, listen func(int) (net.PacketConn, error)) (net.PacketConn, error) {
+func (c netfrontMode) open(port int, remote *net.UDPAddr, listen func(int) (net.PacketConn, error)) (net.PacketConn, error) {
 	opts := c.options()
 	if err := opts.Validate(port); err != nil {
-		return nil, netfrontConfigError(err)
+		return nil, c.configError(err)
 	}
 	conns := make([]net.PacketConn, 0, 1+len(c.ExtraPorts))
 	closeAll := func() {
@@ -62,14 +86,18 @@ func (c configObfsNetFront) open(port int, remote *net.UDPAddr, listen func(int)
 		pc, err := listen(p)
 		if err != nil {
 			closeAll()
-			return nil, netfrontConfigError(fmt.Errorf("open UDP socket for port %d: %w", p, err))
+			return nil, c.configError(fmt.Errorf("open UDP socket for port %d: %w", p, err))
 		}
 		conns = append(conns, pc)
 	}
-	w, err := obfs.WrapPacketConnNetFront(conns[0], conns[1:], remote, opts)
+	wrap := obfs.WrapPacketConnNetFront
+	if c.kind == "netfrontlite" {
+		wrap = obfs.WrapPacketConnNetFrontLite
+	}
+	w, err := wrap(conns[0], conns[1:], remote, opts)
 	if err != nil {
 		closeAll()
-		return nil, netfrontConfigError(err)
+		return nil, c.configError(err)
 	}
 	return w, nil
 }

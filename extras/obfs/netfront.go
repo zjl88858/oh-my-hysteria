@@ -46,6 +46,16 @@ type netfrontConn struct {
 // serverAddr is the fixed remote primary on a client, nil on a server.
 // sides contain distinct, unconnected UDP sockets in ExtraPorts order.
 func WrapPacketConnNetFront(main net.PacketConn, sides []net.PacketConn, serverAddr *net.UDPAddr, opts NetFrontOptions) (net.PacketConn, error) {
+	return prestoStandard.wrapNetFront(main, sides, serverAddr, opts)
+}
+
+// WrapPacketConnNetFrontLite uses a Lite primary and separately authenticated
+// NetFrontLite side lanes. Socket ownership and extra-port order match NetFront.
+func WrapPacketConnNetFrontLite(main net.PacketConn, sides []net.PacketConn, serverAddr *net.UDPAddr, opts NetFrontOptions) (net.PacketConn, error) {
+	return prestoLite.wrapNetFront(main, sides, serverAddr, opts)
+}
+
+func (v prestoVariant) wrapNetFront(main net.PacketConn, sides []net.PacketConn, serverAddr *net.UDPAddr, opts NetFrontOptions) (net.PacketConn, error) {
 	if main == nil {
 		return nil, errors.New("netfront: missing primary socket")
 	}
@@ -81,7 +91,7 @@ func WrapPacketConnNetFront(main net.PacketConn, sides []net.PacketConn, serverA
 		}
 		seen[a.AddrPort()] = true
 	}
-	profile, err := compileNetfront(opts, serverAddr == nil)
+	profile, err := v.compileNetfront(opts, serverAddr == nil)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +101,7 @@ func WrapPacketConnNetFront(main net.PacketConn, sides []net.PacketConn, serverA
 			w.dests = append(w.dests, netip.AddrPortFrom(remote.Addr(), uint16(port)))
 		}
 	}
-	w.presto, err = newPrestoConn(w, PrestoOptions{Password: profile.prestoKey, Server: serverAddr == nil})
+	w.presto, err = v.newPrestoConn(w, PrestoOptions{Password: profile.prestoKey, Server: serverAddr == nil})
 	if err != nil {
 		return nil, err
 	}

@@ -12,13 +12,14 @@ from endpoint import Echo
 from local_cases import LO, certificate, cli, group, server_config
 
 
-def run(tmp, server_exe, client_exe, case):
+def run(tmp, server_exe, client_exe, case, *, mode="netfront3", client_mode=None):
     cfg=dict(auth=secrets.token_urlsafe(32),psk=secrets.token_urlsafe(40),tag=secrets.token_hex(8),
-             mode="netfront3",load="short",host=LO,ports=group("netfront3"))
+             mode=mode,load="short",host=LO,ports=group(mode))
     echo=Echo(cfg)
     try:
         with cli(server_exe,"server",tmp/"server-config.json",server_config(tmp,cfg,echo.tp,echo.up),b"server up and running"):
             local={**cfg,"tcp":echo.tp,"udp":echo.up}
+            if client_mode is not None:local["mode"]=client_mode
             if case=="wrong-obfs":local["psk"]=secrets.token_urlsafe(40)
             if case=="wrong-auth":local["auth"]=secrets.token_urlsafe(32)
             ca=(tmp/"untrusted" if case=="wrong-ca" else tmp)/"ca.pem"

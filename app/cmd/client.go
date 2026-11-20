@@ -146,17 +146,19 @@ type clientConfigObfsGecko struct {
 }
 
 type clientConfigObfs struct {
-	Type       string                     `mapstructure:"type"`
-	Salamander clientConfigObfsSalamander `mapstructure:"salamander"`
-	Gecko      clientConfigObfsGecko      `mapstructure:"gecko"`
-	Blink      configObfsBlink            `mapstructure:"blink"`
-	Presto     configObfsPresto           `mapstructure:"presto"`
-	NetFront   configObfsNetFront         `mapstructure:"netfront"`
-	Trident    configObfsTrident          `mapstructure:"trident"`
-	Carakan    configObfsCarakan          `mapstructure:"carakan"`
-	Servo      configObfsServo            `mapstructure:"servo"`
-	Tasman     configObfsTasman           `mapstructure:"tasman"`
-	Mariner    configObfsMariner          `mapstructure:"mariner"`
+	Type         string                     `mapstructure:"type"`
+	Salamander   clientConfigObfsSalamander `mapstructure:"salamander"`
+	Gecko        clientConfigObfsGecko      `mapstructure:"gecko"`
+	Blink        configObfsBlink            `mapstructure:"blink"`
+	Presto       configObfsPresto           `mapstructure:"presto"`
+	PrestoLite   configObfsPresto           `mapstructure:"prestolite"`
+	NetFront     configObfsNetFront         `mapstructure:"netfront"`
+	NetFrontLite configObfsNetFront         `mapstructure:"netfrontlite"`
+	Trident      configObfsTrident          `mapstructure:"trident"`
+	Carakan      configObfsCarakan          `mapstructure:"carakan"`
+	Servo        configObfsServo            `mapstructure:"servo"`
+	Tasman       configObfsTasman           `mapstructure:"tasman"`
+	Mariner      configObfsMariner          `mapstructure:"mariner"`
 }
 
 type clientConfigTLS struct {
@@ -280,14 +282,14 @@ func (c *clientConfig) fillServerAddr(hyConfig *client.Config) error {
 // fillConnFactory must be called after fillServerAddr, since the right kind
 // of inner conn (plain vs port-hopping) depends on the resolved server addr.
 func (c *clientConfig) fillConnFactory(hyConfig *client.Config) error {
-	netfront := strings.EqualFold(c.Obfs.Type, "netfront")
-	if netfront {
+	nf, multiPort := c.Obfs.netfrontMode()
+	if multiPort {
 		primary, ok := hyConfig.ServerAddr.(*net.UDPAddr)
 		if !ok || primary == nil || c.Mimic.Enabled {
-			return netfrontConfigError(errNetfrontTransport)
+			return nf.configError(errNetfrontTransport)
 		}
-		if err := c.Obfs.NetFront.options().Validate(primary.Port); err != nil {
-			return netfrontConfigError(err)
+		if err := nf.options().Validate(primary.Port); err != nil {
+			return nf.configError(err)
 		}
 	}
 	if strings.EqualFold(c.Obfs.Type, "mariner") && hyConfig.ServerAddr != nil && hyConfig.ServerAddr.Network() == "udphop" {
@@ -310,6 +312,9 @@ func (c *clientConfig) fillConnFactory(hyConfig *client.Config) error {
 	}
 	if strings.EqualFold(c.Obfs.Type, "presto") && hyConfig.ServerAddr != nil && hyConfig.ServerAddr.Network() == "udphop" {
 		return configError{Field: "obfs.presto", Err: errors.New("Presto does not support port hopping")}
+	}
+	if strings.EqualFold(c.Obfs.Type, "prestolite") && hyConfig.ServerAddr != nil && hyConfig.ServerAddr.Network() == "udphop" {
+		return configError{Field: "obfs.prestolite", Err: errors.New("PrestoLite does not support port hopping")}
 	}
 	so, err := c.socketOptions()
 	if err != nil {
@@ -335,11 +340,10 @@ func (c *clientConfig) fillConnFactory(hyConfig *client.Config) error {
 	default:
 		return configError{Field: "transport.type", Err: errors.New("unsupported transport type")}
 	}
-	if netfront {
+	if multiPort {
 		primary := hyConfig.ServerAddr.(*net.UDPAddr)
-		cfg := c.Obfs.NetFront
 		hyConfig.ConnFactory = &singleUseConnFactory{Open: func() (net.PacketConn, error) {
-			return cfg.open(primary.Port, primary, func(int) (net.PacketConn, error) { return so.ListenUDP() })
+			return nf.open(primary.Port, primary, func(int) (net.PacketConn, error) { return so.ListenUDP() })
 		}}
 		return nil
 	}
@@ -399,6 +403,8 @@ func (c *clientConfig) wrapObfs(conn net.PacketConn) (net.PacketConn, error) {
 			return nil, configError{Field: "obfs.trident", Err: err}
 		}
 		return wrapped, nil
+	case "prestolite":
+		return wrapPrestoLiteConfig(conn, c.Obfs.PrestoLite, false)
 	case "presto":
 		wrapped, err := obfs.WrapPacketConnPresto(conn, c.Obfs.Presto.options(false))
 		if err != nil {
@@ -528,8 +534,8 @@ func (c *clientConfig) validateMimic() error {
 	}
 	view := *c
 	view.parseURI()
-	if strings.EqualFold(view.Obfs.Type, "netfront") {
-		return netfrontConfigError(errNetfrontTransport)
+	if nf, ok := view.Obfs.netfrontMode(); ok {
+		return nf.configError(errNetfrontTransport)
 	}
 	// Mimic matches traffic by a single ip:port. Port hopping moves the server
 	// port over a range, which would need one filter per port.
@@ -622,10 +628,11 @@ func (c *clientConfig) fillFastOpen(hyConfig *client.Config) error {
 func (c *clientConfig) URI() string {
 	q := url.Values{}
 	switch strings.ToLower(c.Obfs.Type) {
-	case "netfront":
-		q.Set("obfs", "netfront")
-		q.Set("obfs-password", c.Obfs.NetFront.Password)
-		q.Set("netfront-extra-ports", c.Obfs.NetFront.portList())
+	case "netfront", "netfrontlite":
+		nf, _ := c.Obfs.netfrontMode()
+		q.Set("obfs", nf.kind)
+		q.Set("obfs-password", nf.Password)
+		q.Set(nf.kind+"-extra-ports", nf.portList())
 	case "mariner":
 		q.Set("obfs", "mariner")
 		q.Set("obfs-password", c.Obfs.Mariner.Password)
@@ -644,6 +651,9 @@ func (c *clientConfig) URI() string {
 	case "presto":
 		q.Set("obfs", "presto")
 		q.Set("obfs-password", c.Obfs.Presto.Password)
+	case "prestolite":
+		q.Set("obfs", "prestolite")
+		q.Set("obfs-password", c.Obfs.PrestoLite.Password)
 	case "trident":
 		q.Set("obfs", "trident")
 		q.Set("obfs-password", c.Obfs.Trident.Password)
@@ -734,6 +744,8 @@ func (c *clientConfig) parseURI() bool {
 		switch strings.ToLower(obfsType) {
 		case "netfront":
 			c.Obfs.NetFront = configObfsNetFront{Password: q.Get("obfs-password"), ExtraPorts: parseNetfrontPorts(q["netfront-extra-ports"])}
+		case "netfrontlite":
+			c.Obfs.NetFrontLite = configObfsNetFront{Password: q.Get("obfs-password"), ExtraPorts: parseNetfrontPorts(q["netfrontlite-extra-ports"])}
 		case "mariner":
 			c.Obfs.Mariner.Password = q.Get("obfs-password")
 		case "tasman":
@@ -746,6 +758,8 @@ func (c *clientConfig) parseURI() bool {
 			c.Obfs.Gecko.Password = q.Get("obfs-password")
 		case "presto":
 			c.Obfs.Presto.Password = q.Get("obfs-password")
+		case "prestolite":
+			c.Obfs.PrestoLite.Password = q.Get("obfs-password")
 		case "trident":
 			c.Obfs.Trident.Password = q.Get("obfs-password")
 		case "carakan":
@@ -842,8 +856,8 @@ func (c *clientConfig) parseRealmAddr() (*realm.Addr, bool, error) {
 }
 
 func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
-	if strings.EqualFold(c.Obfs.Type, "netfront") {
-		return nil, netfrontConfigError(errNetfrontTransport)
+	if nf, ok := c.Obfs.netfrontMode(); ok {
+		return nil, nf.configError(errNetfrontTransport)
 	}
 	logger.Debug("realm client mode detected",
 		zap.String("realm", addr.RealmID),

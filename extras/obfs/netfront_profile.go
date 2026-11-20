@@ -64,7 +64,7 @@ type netfrontProfile struct {
 	seed      [2]uint64
 }
 
-func compileNetfront(o NetFrontOptions, server bool) (p netfrontProfile, err error) {
+func (v prestoVariant) compileNetfront(o NetFrontOptions, server bool) (p netfrontProfile, err error) {
 	derive := func(label string, n int) ([]byte, error) {
 		return hkdf.Key(sha256.New, o.Password, []byte(netfrontDomain), label, n)
 	}
@@ -72,7 +72,7 @@ func compileNetfront(o NetFrontOptions, server bool) (p netfrontProfile, err err
 		return p, err
 	}
 	sideKey := func(dir string) (cipher.AEAD, error) {
-		k, e := derive("side/"+dir, 32)
+		k, e := derive(v.authLabel("side/"+dir), 32)
 		if e != nil {
 			return nil, e
 		}

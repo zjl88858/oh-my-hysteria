@@ -31,7 +31,7 @@ func TestNetFrontReferenceFrames(t *testing.T) {
 		{nfProbe, "000102030405060708090a0b0c0d0e0f101112131415161711251e9eb15c8188db78bd784fd4709d7c0516bd4b208821ef514bd42eaddf3bf597236f4973d95d68f0653b7f5d477e806a361e69493a5a7f7e26f22a5e71873c1770e7"},
 		{nfOffer, "000102030405060708090a0b0c0d0e0f10111213141516170cf4eb0c58482052f9b8800b7816570d3cf61546262c6b4ed1a7d419aa92d50a0f9c139380165db458036effe1d272aa0bef74b0f247c19862d97a32898c905f0dee98ea"},
 	} {
-		p, err := compileNetfront(NetFrontOptions{[]byte(netfrontTestKey), []int{1, 2, 3}}, tc.kind == nfProbe)
+		p, err := prestoStandard.compileNetfront(NetFrontOptions{[]byte(netfrontTestKey), []int{1, 2, 3}}, tc.kind == nfProbe)
 		require.NoError(t, err)
 		require.Equal(t, "10ba75e0c92d265548a75e05916fbeab9aca678fef934b940e310f2f4f08d84f", hex.EncodeToString(p.prestoKey))
 		b, err := hex.DecodeString(tc.wire)
@@ -51,12 +51,12 @@ func TestNetFrontReferenceFrames(t *testing.T) {
 
 func TestNetFrontSideAuthentication(t *testing.T) {
 	o := NetFrontOptions{[]byte(netfrontTestKey), []int{4011, 4012, 4013}}
-	c, err := compileNetfront(o, false)
+	c, err := prestoStandard.compileNetfront(o, false)
 	require.NoError(t, err)
-	s, err := compileNetfront(o, true)
+	s, err := prestoStandard.compileNetfront(o, true)
 	require.NoError(t, err)
 	o.Password = append(o.Password, 'x')
-	other, err := compileNetfront(o, true)
+	other, err := prestoStandard.compileNetfront(o, true)
 	require.NoError(t, err)
 	a := netfrontAction{lane: 1, wire: 311, frame: netfrontFrame{kind: nfData, session: [16]byte{1}, seq: 12, token: [16]byte{5}, body: bytes.Repeat([]byte("x"), 121)}}
 	wire := a.seal(make([]byte, netfrontMaxSide), c.tx, 3)
@@ -72,9 +72,9 @@ func TestNetFrontSideAuthentication(t *testing.T) {
 	} {
 		require.False(t, decode(bytes.Clone(wire)))
 	}
-	tx, _, err := prestoCiphers([]byte(netfrontTestKey), false)
+	tx, _, err := prestoStandard.prestoCiphers([]byte(netfrontTestKey), false)
 	require.NoError(t, err)
-	_, rx, err := prestoCiphers(s.prestoKey, true)
+	_, rx, err := prestoStandard.prestoCiphers(s.prestoKey, true)
 	require.NoError(t, err)
 	b := prestoTestFrame(tx, prestoTestHeader(), []byte("legacy"), 0)
 	_, err = rx.Open(nil, b[:prestoNonce], b[prestoNonce:], nil)
@@ -83,7 +83,7 @@ func TestNetFrontSideAuthentication(t *testing.T) {
 
 func TestNetFrontReachabilityAndSessionBinding(t *testing.T) {
 	c, _ := newPrestoTest(t, true)
-	p, err := compileNetfront(NetFrontOptions{[]byte(netfrontTestKey), []int{10, 11}}, true)
+	p, err := prestoStandard.compileNetfront(NetFrontOptions{[]byte(netfrontTestKey), []int{10, 11}}, true)
 	require.NoError(t, err)
 	w := netfrontWire{presto: c, profile: p}
 	now := time.Now()
@@ -155,7 +155,7 @@ func TestNetFrontTrafficShapes(t *testing.T) {
 		counts                 [3]int
 	}
 	run := func(key []byte, id [16]byte) totals {
-		p, err := compileNetfront(NetFrontOptions{key, []int{10, 11, 12}}, false)
+		p, err := prestoStandard.compileNetfront(NetFrontOptions{key, []int{10, 11, 12}}, false)
 		require.NoError(t, err)
 		s := p.newSession(id)
 		start := time.Unix(100000, 0)
@@ -316,22 +316,29 @@ func netfrontTestSockets(t *testing.T, count int, dropSides bool) ([]net.PacketC
 }
 
 func TestNetFrontLoopbackPorts(t *testing.T) {
-	for _, mode := range []string{"three", "blocked", "swapped"} {
+	for _, mode := range []string{"three", "blocked", "swapped", "two-lite", "three-lite", "blocked-lite"} {
 		t.Run(mode, func(t *testing.T) {
 			count := 2
-			if mode == "three" {
+			if mode == "three" || mode == "three-lite" {
 				count = 3
 			}
+			wrap := WrapPacketConnNetFront
+			lite := mode == "two-lite" || mode == "three-lite" || mode == "blocked-lite"
+			if lite {
+				wrap = WrapPacketConnNetFrontLite
+			}
+			blocked := mode == "blocked" || mode == "blocked-lite"
+			reachable := !blocked && mode != "swapped"
 			sr, ports := netfrontTestSockets(t, count, false)
-			cr, _ := netfrontTestSockets(t, count, mode == "blocked")
+			cr, _ := netfrontTestSockets(t, count, blocked)
 			o := NetFrontOptions{[]byte(netfrontTestKey), ports}
-			server, err := WrapPacketConnNetFront(sr[0], sr[1:], nil, o)
+			server, err := wrap(sr[0], sr[1:], nil, o)
 			require.NoError(t, err)
 			defer server.Close()
 			if mode == "swapped" {
 				o.ExtraPorts = []int{ports[1], ports[0]}
 			}
-			client, err := WrapPacketConnNetFront(cr[0], cr[1:], sr[0].LocalAddr().(*net.UDPAddr), o)
+			client, err := wrap(cr[0], cr[1:], sr[0].LocalAddr().(*net.UDPAddr), o)
 			require.NoError(t, err)
 			defer client.Close()
 			require.NoError(t, client.SetDeadline(time.Now().Add(10*time.Second)))
@@ -374,6 +381,7 @@ func TestNetFrontLoopbackPorts(t *testing.T) {
 			require.NoError(t, <-echoErr)
 			for i, pc := range []net.PacketConn{client, server} {
 				raw := [][]net.PacketConn{cr, sr}[i]
+				require.Equal(t, lite, pc.(*netfrontConn).wire.presto.lite != nil)
 				stats := pc.(*netfrontConn).NetFrontStats()
 				var totalSide, sideData uint64
 				for j := 1; j <= count; j++ {
@@ -384,7 +392,7 @@ func TestNetFrontLoopbackPorts(t *testing.T) {
 					tap.mu.Unlock()
 					require.Equal(t, int(l.SentPackets), n)
 					require.LessOrEqual(t, size, netfrontMaxSide)
-					if mode == "three" {
+					if reachable {
 						require.Positive(t, l.VerifiedPaths, "port %d: %+v", j, stats)
 						require.Positive(t, l.Data+l.Cover)
 					} else {
@@ -399,7 +407,7 @@ func TestNetFrontLoopbackPorts(t *testing.T) {
 					totalSide += l.SentPackets
 					sideData += l.Data
 				}
-				if mode == "three" {
+				if reachable {
 					require.Positive(t, sideData, "both directions carry real small frames")
 				}
 				require.Less(t, totalSide, stats.Lanes[0].SentPackets)

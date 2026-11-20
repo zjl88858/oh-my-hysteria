@@ -8,15 +8,8 @@ from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCUMENTS = (
-    "README.md", "CHANGELOG.md", "docs/obfuscation.md",
-    "docs/carakan.md", "docs/presto.md", "docs/netfront.md", "docs/network-test-netfront-2026-11-20.md",
-    "tests/network/netfront_matrix/README.md", "docs/trident.md",
-    "docs/release-v1.1.0.md",
-    "docs/servo.md",
-    "docs/tasman.md",
-    "docs/mariner.md", "docs/release-v1.2.0.md", "docs/release-v1.3.0.md",
-    "docs/designs/00-COMMON.md", "docs/designs/03-MARINER.md",
-    "docs/designs/03-MARINER-IMPLEMENTATION.md",
+    "README.md", "CHANGELOG.md", "tests/network/netfront_matrix/README.md",
+    *(p.relative_to(ROOT).as_posix() for p in sorted((ROOT / "docs").glob("*.md"))),
 )
 
 

@@ -27,6 +27,7 @@ type prestoIntegrationFactory struct {
 	network, listen string
 	options         obfs.PrestoOptions
 	conn            net.PacketConn
+	lite            bool
 }
 
 func (f *prestoIntegrationFactory) New(net.Addr) (net.PacketConn, error) {
@@ -34,7 +35,11 @@ func (f *prestoIntegrationFactory) New(net.Addr) (net.PacketConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	w, err := obfs.WrapPacketConnPresto(pc, f.options)
+	wrap := obfs.WrapPacketConnPresto
+	if f.lite {
+		wrap = obfs.WrapPacketConnPrestoLite
+	}
+	w, err := wrap(pc, f.options)
 	if err != nil {
 		pc.Close()
 		return nil, err
@@ -53,13 +58,17 @@ func TestPrestoTLSAndTransfer(t *testing.T) {
 	require.NoError(t, err)
 	roots := x509.NewCertPool()
 	roots.AddCert(cert)
-	for _, tc := range []struct{ name, network, listen, password string }{
-		{"genome-a-ipv4", "udp4", "127.0.0.1:0", "presto-integration-random-test-A-32+"},
-		{"genome-b-ipv4", "udp4", "127.0.0.1:0", "presto-integration-random-test-B-32+"},
-		{"genome-a-ipv6", "udp6", "[::1]:0", "presto-integration-random-test-A-32+"},
+	for _, tc := range []struct {
+		name, network, listen, password string
+		lite                            bool
+	}{
+		{"genome-a-ipv4", "udp4", "127.0.0.1:0", "presto-integration-random-test-A-32+", false},
+		{"genome-b-ipv4", "udp4", "127.0.0.1:0", "presto-integration-random-test-B-32+", false},
+		{"genome-a-ipv6", "udp6", "[::1]:0", "presto-integration-random-test-A-32+", false},
+		{"prestolite-ipv4", "udp4", "127.0.0.1:0", "presto-integration-random-test-A-32+", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			sf := &prestoIntegrationFactory{network: tc.network, listen: tc.listen, options: obfs.PrestoOptions{Password: []byte(tc.password), Server: true}}
+			sf := &prestoIntegrationFactory{network: tc.network, listen: tc.listen, options: obfs.PrestoOptions{Password: []byte(tc.password), Server: true}, lite: tc.lite}
 			pc, err := sf.New(nil)
 			if tc.network == "udp6" && err != nil {
 				t.Skipf("IPv6 unavailable: %v", err)
@@ -74,7 +83,7 @@ func TestPrestoTLSAndTransfer(t *testing.T) {
 			_, err = noise.WriteTo(make([]byte, 4096), pc.LocalAddr())
 			require.NoError(t, err)
 			noise.Close()
-			cf := &prestoIntegrationFactory{network: tc.network, listen: tc.listen, options: obfs.PrestoOptions{Password: []byte(tc.password)}}
+			cf := &prestoIntegrationFactory{network: tc.network, listen: tc.listen, options: obfs.PrestoOptions{Password: []byte(tc.password)}, lite: tc.lite}
 			c, _, err := client.NewClient(&client.Config{ConnFactory: cf, ServerAddr: pc.LocalAddr(), Auth: "test-only-auth", TLSConfig: client.TLSConfig{ServerName: "localhost", RootCAs: roots}})
 			require.NoError(t, err)
 			defer c.Close()
