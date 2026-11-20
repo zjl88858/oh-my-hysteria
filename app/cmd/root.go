@@ -24,7 +24,7 @@ const (
 
 var (
 	// These values will be injected by the build system
-	appVersion   = "v1.2.1"
+	appVersion   = "v1.3.0"
 	appDate      = "Unknown"
 	appType      = "Unknown" // aka channel
 	appToolchain = "Unknown"

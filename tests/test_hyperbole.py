@@ -24,7 +24,7 @@ class BuildToolTests(unittest.TestCase):
     def test_default_version_ignores_upstream_tags_and_environment(self):
         with mock.patch.dict(os.environ, {"HY_APP_VERSION": "v2.99.0"}, clear=True):
             with mock.patch.object(subprocess, "check_output") as git:
-                self.assertEqual(hyperbole.get_app_version(), "v1.2.1")
+                self.assertEqual(hyperbole.get_app_version(), hyperbole.VERSION_FILE.read_text(encoding="utf-8").strip())
                 git.assert_not_called()
 
     def test_release_version_is_consistent(self):

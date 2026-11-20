@@ -2,19 +2,20 @@
 
 oh-my-hysteria（OMHY）是 [Hysteria 2](https://hysteria.network/zh/) 的增强版。它保留了原有的代理方式和分享链接，主要扩展了两件事：**混淆**决定数据以什么样的包发出去，**拥塞控制**决定网络还能承受多快的发送速度。两者可以分别选择；默认使用 BBR，不启用额外混淆。
 
-当前源码版本 **v1.2.1**，已同步 Hysteria v2.14.0 的表达式访问规则（ACL）和 UDP 转发优化。QUIC 更新合入了[本地 quic-go 分支](third_party/quic-go/OHMY-FORK.md)，保留 OMHY 的拥塞控制和发送时序支持。
+当前源码版本 **v1.3.0** 新增可选的 [NetFront](docs/netfront.md)：主端口传送大部分数据，另用两到三个固定 UDP 端口收发小包。沿用 Hysteria v2.14.0 的表达式访问规则（ACL）、UDP 转发优化和带有 OMHY 扩展的[本地 quic-go 分支](third_party/quic-go/OHMY-FORK.md)。
 
-[下载已发布版本](https://github.com/zjl88858/oh-my-hysteria/releases) · [混淆配置](#混淆配置) · [拥塞控制](#拥塞控制) · [更新日志](CHANGELOG.md)
+[下载已发布版本](https://github.com/zjl88858/oh-my-hysteria/releases) · [v1.3.0 发布说明](docs/release-v1.3.0.md) · [混淆配置](#混淆配置) · [拥塞控制](#拥塞控制) · [更新日志](CHANGELOG.md)
 
 ## 混淆配置
 
-同一份数据，可以改变**包有多大、什么时候发**，也可以改变**哪些数据装进同一个包**，或者改变**包里的字节怎样排列**。下面这些模式分别从这三个位置入手。它们改变的是外层 UDP 包；连接本身仍由 QUIC/TLS 加密。
+同一份数据，可以改变**包有多大、什么时候发、发到哪个端口**，也可以改变**哪些数据装进同一个包**，或者改变**包里的字节怎样排列**。它们改变的是外层 UDP 包；连接本身仍由 QUIC/TLS 加密。
 
 ### 改变包的大小和发送节奏
 
 - **Salamander / Gecko** 是上游提供的两种方式。Salamander 把密码和每包新生成的随机值组合起来，用算出的掩码改写包内容。原来一个包仍发成一个包，大小固定增加 8 字节。Gecko 在此基础上把握手数据拆开并填充，因此主要改变刚建立连接时看到的包长和包数。
 - **[Blink](docs/blink.md)** 给每个包加上接收方可以验证的封装，再随机补入少量字节。这样即使原始数据一样长，发出去的包也可以不同长。你可以限定最多补多少、是否拆包，以及客户端在开头发几个不带业务数据的包；上限越小，对流量的影响越可控。
 - **[Presto](docs/presto.md)** 改的是一串包之间的关系。密码决定一套规则，例如大包之后更可能接什么长度的包、连续发多少包后稍停一下。每次连接都按这套规则重新抽样，再通过拆分和填充调整包长。因此，同一密码下的流量有相似的节奏，但不会重播同一串包。代价是额外流量，以及两批包之间的短暂等待。
+- **[NetFront](docs/netfront.md)** 在 Presto 的基础上，让一个主端口承担大部分通信，另外两三个端口间歇地交换小包。例如，一路像有人按下语音键，说几句又停下；另一路像偶尔上报一次状态。密码决定各端口偏向哪种节奏，每次连接再抽样，不按固定比例分包。副路通过双向验证后可携带真实小帧；如果只有大包，大包继续走主路，有余额才另发小包。代价是额外的 UDP 端口和流量。
 
 ### 重新组合数据，或为丢包留一份修复材料
 
@@ -94,6 +95,21 @@ obfs:
 ```
 
 包长和发送间隔由密码生成，无需另设。详见 [Presto 技术文档](docs/presto.md)。
+
+</details>
+
+<details>
+<summary>NetFront · 主端口之外，再配置两到三个 UDP 端口</summary>
+
+```yaml
+obfs:
+  type: netfront
+  netfront:
+    password: "REPLACE-WITH-AT-LEAST-32-RANDOM-BYTES"
+    extraPorts: [31011, 31012, 31013]
+```
+
+例如主端口是 443，服务端仍写 `listen: :443`，客户端仍写 `server: example.com:443`。`extraPorts` 填的是**服务端**额外监听的端口，可以只填两个；两端按相同顺序填写，在服务端放行这些 UDP 端口。有 NAT 或容器端口映射时也要分别转发。详见 [NetFront 技术文档](docs/netfront.md)及 [HTTP、SOCKS5 和 UDP 代理实测](docs/network-test-netfront-2026-11-20.md)。
 
 </details>
 
@@ -204,7 +220,7 @@ congestion:
 python hyperbole.py build -r
 ```
 
-本机平台的产物位于 `build/`。也可在源码目录运行 `docker build -t oh-my-hysteria:1.2.1 .` 构建服务端镜像。各版本的测试环境、流量开销和已知限制见[构建与测试记录](BUILD-REPORT.md)。
+本机平台的产物位于 `build/`。也可在源码目录运行 `docker build -t oh-my-hysteria:1.3.0 .` 构建服务端镜像。各版本的测试环境、流量开销和已知限制见[构建与测试记录](BUILD-REPORT.md)。
 
 ## 许可与致谢
 
@@ -215,6 +231,6 @@ python hyperbole.py build -r
 | [zjl88858](https://github.com/zjl88858) | 项目维护者 |
 | **GPT-6.1 Sol（OpenAI）** | 共同开发者（Co-Developer），负责截至 **v1.2.0（含）** 的开发工作 |
 | **GPT-6.2 Astra（OpenAI）** | 共同开发者（Co-Developer），从 **v1.2.1** 起接手后续开发 |
-| **Gemini-4 Carbon** | 代码审查（Code Review） |
+| **Gemini-4 Carbon** | 负责此前版本的代码审查（Code Review） |
 
 项目原创新增内容采用 [MIT-0 许可](LICENSE.md)。Hysteria 2、quic-go 及其他第三方代码保留各自许可，详见[第三方许可声明](LICENSE-THIRD-PARTY.md)。分发程序时请一并保留随附的许可文件。

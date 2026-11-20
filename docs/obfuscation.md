@@ -11,6 +11,7 @@ Hysteria2 / QUIC / TLS 完成。功能状态见 [README](../README.md#混淆配�
 | Gecko | Salamander 加握手分片与填充 | 握手阶段增加包数 |
 | [Blink](blink.md) | 认证封装、填充、可选分片 | 填充和分片开销 |
 | [Presto](presto.md) | 密码派生包长、转移和突发节奏 | 填充、分片及短暂发送间隔 |
+| [NetFront](netfront.md) | 主端口使用 Presto，两三个副端口按各自节奏承载经验证的小帧 | 额外 UDP 端口、路径验证与小包封装 |
 | [Trident](trident.md) | 将认证密文编码为密码派生字节码 | 编码膨胀和分片 |
 | [Carakan](carakan.md) | 可调低熵字节谱与纠删修复 | 降熵膨胀及修复冗余 |
 | [Servo](servo.md) | 跨数据报装箱、密码派生容量 | 52B/容器、10B/记录及短暂聚合等待 |
@@ -23,16 +24,16 @@ Brutal 带宽协商规则。
 ## 部署要求
 
 - 两端选择相同类型和协议格式，并配置相同混淆密码。Carakan 的目标熵也必须相同。
-- 混淆密码与代理登录的 `auth` 独立。Presto、Trident、Carakan、Servo、Tasman、Mariner 接受 32..1024 字节，
+- 混淆密码与代理登录的 `auth` 独立。Presto、NetFront、Trident、Carakan、Servo、Tasman、Mariner 接受 32..1024 字节，
   建议使用至少 32 个随机字节生成的秘密；例如运行以下命令，将完整输出用作密码：
 
   ```sh
   python -c "import secrets; print(secrets.token_urlsafe(32))"
   ```
 
-- Blink、Presto、Trident、Carakan、Servo、Tasman、Mariner 的新会话准入要求两端时钟差不超过 30 秒，
-  且不支持端口跳跃。请保持系统时间同步，使用固定服务端 UDP 端口。
-- 这些认证封装将内层 QUIC 限制为 1200 字节并关闭其 PMTU 探测；Presto、Trident、
+- Blink、Presto、NetFront、Trident、Carakan、Servo、Tasman、Mariner 的新会话准入要求两端时钟差不超过 30 秒，
+  且不支持端口跳跃。请保持系统时间同步。NetFront 使用一组同时开放的固定端口，其余模式使用单一固定端口。
+- 这些认证封装将内层 QUIC 限制为 1200 字节并关闭其 PMTU 探测；Presto、NetFront、Trident、
   Carakan、Servo、Tasman、Mariner 的外层 UDP payload 上限为 1232 字节，Blink 按自身配置限制。
 - 保持正常 TLS 证书校验。更换协议或密码时同时更新两端；连接失败不会自动改用其他混淆。
 - Servo/Tasman使用有限异步发送队列，错误消费和排队上限见协议页；Mariner同步发送。

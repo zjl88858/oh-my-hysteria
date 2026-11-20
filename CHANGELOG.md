@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.3.0
+
+- Add [NetFront](docs/netfront.md), an opt-in obfuscation mode with a Presto-based
+  primary path and two or three authenticated UDP ports for small frames.
+  Lane roles are derived from the password; each session independently samples
+  its timing. Configure the same ordered `obfs.netfront.extraPorts` on both peers.
+  `listen`, `server` and the share URI authority still use only the primary port.
+- Include the accepted `.2` renewal fix: on the same verified endpoint, receive
+  in-flight frames under the previous credential for up to two seconds, bounded
+  by its original expiry. See the [HTTP, SOCKS5 and UDP proxy tests](docs/network-test-netfront-2026-11-20.md).
+- Remove seven obsolete quic-go files left in the public v1.2.1 source tree,
+  including the old HTTP/3 qlog declarations that caused duplicate-symbol build errors.
+  The local QUIC fork and the existing congestion-control defaults are retained.
+
+[v1.3.0 release notes / 发布说明](docs/release-v1.3.0.md)
+
+## v1.2.1
+
+- Merge Hysteria `app/v2.14.0` (`c2b181e0`): expression-based `acl.rules` and
+  `acl.rulesFile`, `acl translate` / `acl test`, and lower per-packet UDP forwarding overhead.
+  Legacy `acl.file` and `acl.inline` are translated on load. Custom implementations of
+  `core/server.Outbound` must accept the new `*server.RequestInfo` first argument.
+- Rebase the local quic-go fork onto apernet's v0.65.0-based `2895f039137a`.
+  Keep rich congestion events, send-time observation and Tasman's conservative wire reservations.
+- Import the optional release banner generator and its OFL-licensed fonts.
+
 ## v1.2.0 (release preparation)
 
 - Add opt-in Mariner: password-compiled nonlinear byte relations, interleaving,

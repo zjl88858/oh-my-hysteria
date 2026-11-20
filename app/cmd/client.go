@@ -151,6 +151,7 @@ type clientConfigObfs struct {
 	Gecko      clientConfigObfsGecko      `mapstructure:"gecko"`
 	Blink      configObfsBlink            `mapstructure:"blink"`
 	Presto     configObfsPresto           `mapstructure:"presto"`
+	NetFront   configObfsNetFront         `mapstructure:"netfront"`
 	Trident    configObfsTrident          `mapstructure:"trident"`
 	Carakan    configObfsCarakan          `mapstructure:"carakan"`
 	Servo      configObfsServo            `mapstructure:"servo"`
@@ -279,6 +280,16 @@ func (c *clientConfig) fillServerAddr(hyConfig *client.Config) error {
 // fillConnFactory must be called after fillServerAddr, since the right kind
 // of inner conn (plain vs port-hopping) depends on the resolved server addr.
 func (c *clientConfig) fillConnFactory(hyConfig *client.Config) error {
+	netfront := strings.EqualFold(c.Obfs.Type, "netfront")
+	if netfront {
+		primary, ok := hyConfig.ServerAddr.(*net.UDPAddr)
+		if !ok || primary == nil || c.Mimic.Enabled {
+			return netfrontConfigError(errNetfrontTransport)
+		}
+		if err := c.Obfs.NetFront.options().Validate(primary.Port); err != nil {
+			return netfrontConfigError(err)
+		}
+	}
 	if strings.EqualFold(c.Obfs.Type, "mariner") && hyConfig.ServerAddr != nil && hyConfig.ServerAddr.Network() == "udphop" {
 		return configError{Field: "obfs.mariner", Err: errors.New("Mariner does not support port hopping")}
 	}
@@ -323,6 +334,14 @@ func (c *clientConfig) fillConnFactory(hyConfig *client.Config) error {
 		}
 	default:
 		return configError{Field: "transport.type", Err: errors.New("unsupported transport type")}
+	}
+	if netfront {
+		primary := hyConfig.ServerAddr.(*net.UDPAddr)
+		cfg := c.Obfs.NetFront
+		hyConfig.ConnFactory = &singleUseConnFactory{Open: func() (net.PacketConn, error) {
+			return cfg.open(primary.Port, primary, func(int) (net.PacketConn, error) { return so.ListenUDP() })
+		}}
+		return nil
 	}
 	hyConfig.ConnFactory = &singleUseConnFactory{
 		Open: func() (net.PacketConn, error) {
@@ -507,6 +526,11 @@ func (c *clientConfig) validateMimic() error {
 	if !c.Mimic.Enabled {
 		return nil
 	}
+	view := *c
+	view.parseURI()
+	if strings.EqualFold(view.Obfs.Type, "netfront") {
+		return netfrontConfigError(errNetfrontTransport)
+	}
 	// Mimic matches traffic by a single ip:port. Port hopping moves the server
 	// port over a range, which would need one filter per port.
 	_, port, _ := parseServerAddrString(c.Server)
@@ -598,6 +622,10 @@ func (c *clientConfig) fillFastOpen(hyConfig *client.Config) error {
 func (c *clientConfig) URI() string {
 	q := url.Values{}
 	switch strings.ToLower(c.Obfs.Type) {
+	case "netfront":
+		q.Set("obfs", "netfront")
+		q.Set("obfs-password", c.Obfs.NetFront.Password)
+		q.Set("netfront-extra-ports", c.Obfs.NetFront.portList())
 	case "mariner":
 		q.Set("obfs", "mariner")
 		q.Set("obfs-password", c.Obfs.Mariner.Password)
@@ -704,6 +732,8 @@ func (c *clientConfig) parseURI() bool {
 	if obfsType := q.Get("obfs"); obfsType != "" {
 		c.Obfs.Type = obfsType
 		switch strings.ToLower(obfsType) {
+		case "netfront":
+			c.Obfs.NetFront = configObfsNetFront{Password: q.Get("obfs-password"), ExtraPorts: parseNetfrontPorts(q["netfront-extra-ports"])}
 		case "mariner":
 			c.Obfs.Mariner.Password = q.Get("obfs-password")
 		case "tasman":
@@ -812,6 +842,9 @@ func (c *clientConfig) parseRealmAddr() (*realm.Addr, bool, error) {
 }
 
 func (c *clientConfig) realmConfig(addr *realm.Addr) (*client.Config, error) {
+	if strings.EqualFold(c.Obfs.Type, "netfront") {
+		return nil, netfrontConfigError(errNetfrontTransport)
+	}
 	logger.Debug("realm client mode detected",
 		zap.String("realm", addr.RealmID),
 		zap.String("realmServer", addr.HostPort),

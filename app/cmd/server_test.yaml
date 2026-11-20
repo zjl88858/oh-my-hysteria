@@ -33,6 +33,9 @@ obfs:
     verifyPacketsPerSecond: 4096
   presto:
     password: presto-config-fixture-test-only-secret
+  netfront:
+    password: netfront-config-fixture-test-only-secret
+    extraPorts: [4011, 4012]
   servo:
     password: servo-config-fixture-test-only-secret
   tasman:

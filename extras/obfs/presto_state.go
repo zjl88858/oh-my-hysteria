@@ -22,6 +22,7 @@ const (
 
 type prestoPeer struct {
 	session       [16]byte
+	netfront      *netfrontSession // optional server side lanes; expire with the authenticated primary peer
 	addr          netip.AddrPort
 	source        netip.Prefix
 	born          uint64

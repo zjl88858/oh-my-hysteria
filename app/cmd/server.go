@@ -121,6 +121,7 @@ type serverConfigObfs struct {
 	Gecko      serverConfigObfsGecko      `mapstructure:"gecko"`
 	Blink      configObfsBlink            `mapstructure:"blink"`
 	Presto     configObfsPresto           `mapstructure:"presto"`
+	NetFront   configObfsNetFront         `mapstructure:"netfront"`
 	Trident    configObfsTrident          `mapstructure:"trident"`
 	Carakan    configObfsCarakan          `mapstructure:"carakan"`
 	Servo      configObfsServo            `mapstructure:"servo"`
@@ -345,9 +346,13 @@ type serverConfigMasquerade struct {
 }
 
 func (c *serverConfig) fillConn(hyConfig *server.Config) error {
+	netfront := strings.EqualFold(c.Obfs.Type, "netfront")
 	if realmAddr, ok, err := parseServerRealmAddr(c.Listen); ok || err != nil {
 		if err != nil {
 			return configError{Field: "listen", Err: err}
+		}
+		if netfront {
+			return netfrontConfigError(errNetfrontTransport)
 		}
 		return c.fillRealmConn(hyConfig, realmAddr)
 	}
@@ -358,6 +363,17 @@ func (c *serverConfig) fillConn(hyConfig *server.Config) error {
 	uAddr, portUnion, err := resolveServerListenAddr(listenAddr)
 	if err != nil {
 		return configError{Field: "listen", Err: err}
+	}
+	if netfront {
+		if len(portUnion) > 0 || c.Mimic.Enabled {
+			return netfrontConfigError(errNetfrontTransport)
+		}
+		hyConfig.Conn, err = c.Obfs.NetFront.open(uAddr.Port, nil, func(port int) (net.PacketConn, error) {
+			addr := *uAddr // retain wildcard vs explicit v4/v6 and IPv6 zone on every socket
+			addr.Port = port
+			return correctnet.ListenUDP("udp", &addr)
+		})
+		return err
 	}
 	conn, err := correctnet.ListenUDP("udp", uAddr)
 	if err != nil {
@@ -1749,6 +1765,12 @@ func (c *serverConfig) Config() (*server.Config, error) {
 	}
 	for _, f := range fillers {
 		if err := f(hyConfig); err != nil {
+			if hyConfig.Conn != nil {
+				_ = hyConfig.Conn.Close()
+			}
+			if hyConfig.Cleanup != nil {
+				_ = hyConfig.Cleanup.Close()
+			}
 			return nil, err
 		}
 	}

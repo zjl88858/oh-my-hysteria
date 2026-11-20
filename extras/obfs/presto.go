@@ -41,12 +41,14 @@ type prestoSender struct {
 	due           time.Time
 	grammar       prestoGrammar
 	preludeDone   bool
+	netfront      *netfrontSession // optional client side lanes, protected by the connection mutex
 }
 
 type prestoPacketConn struct {
 	inner                       net.PacketConn
 	opts                        PrestoOptions
 	genome                      prestoGenome
+	acceptSource                func(netip.AddrPort, prestoHeaderFields) bool // optional, after authentication under mu
 	tx, rx                      cipher.AEAD
 	readMu, writeMu, mu         sync.Mutex
 	readBuf, plainBuf, writeBuf []byte
@@ -70,6 +72,17 @@ type prestoPacketConn struct {
 }
 
 func WrapPacketConnPresto(conn net.PacketConn, opts PrestoOptions) (net.PacketConn, error) {
+	c, err := newPrestoConn(conn, opts)
+	if err != nil {
+		return nil, err
+	}
+	if udp, ok := conn.(udpLikePacketConn); ok {
+		return &prestoPacketConnUDP{prestoPacketConn: c, udp: udp}, nil
+	}
+	return c, nil
+}
+
+func newPrestoConn(conn net.PacketConn, opts PrestoOptions) (*prestoPacketConn, error) {
 	if conn == nil {
 		return nil, errors.New("presto: nil packet connection")
 	}
@@ -87,9 +100,6 @@ func WrapPacketConnPresto(conn net.PacketConn, opts PrestoOptions) (net.PacketCo
 		readBuf: make([]byte, prestoWireMax+1), plainBuf: make([]byte, 0, prestoWireMax), writeBuf: make([]byte, prestoWireMax),
 		peers: make(map[[16]byte]*prestoPeer), sources: make(map[netip.Prefix]int), routes: make(map[netip.AddrPort]*prestoPeer), senders: make(map[netip.AddrPort]*prestoSender),
 		peerOrder: list.New(), assemblyOrder: list.New(), assemblies: make(map[prestoAssemblyKey]*prestoAssembly), hashSeed: maphash.MakeSeed(),
-	}
-	if udp, ok := conn.(udpLikePacketConn); ok {
-		return &prestoPacketConnUDP{prestoPacketConn: c, udp: udp}, nil
 	}
 	return c, nil
 }
@@ -149,7 +159,7 @@ func (c *prestoPacketConn) ReadFrom(out []byte) (int, net.Addr, error) {
 			continue
 		}
 		h, payload, err := decodePrestoHeader(plain)
-		if err != nil {
+		if err != nil || (c.acceptSource != nil && !c.acceptSource(ap, h)) {
 			c.stats.MalformedDrops++
 			c.mu.Unlock()
 			continue
